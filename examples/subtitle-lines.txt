@@ -1,0 +1,3 @@
+Welcome to vlc-subtitle.
+Press [ to mark the cue start.
+Press ] to save the cue with the next line of text.
