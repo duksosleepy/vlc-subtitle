@@ -1,14 +1,3 @@
-/*****************************************************************************
- * subtitle.c: VLC subtitle offline control module
- *****************************************************************************
- * Copyright (C) 2026 vlc-subtitle contributors
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *****************************************************************************/
-
 #ifdef HAVE_CONFIG_H
 # include "config.h"
 #endif
@@ -29,6 +18,7 @@
 #include <vlc_configuration.h>
 #include <vlc_input.h>
 #include <vlc_interface.h>
+#include <vlc_mtime.h>
 #include <vlc_playlist.h>
 #include <vlc_plugin.h>
 #include <vlc_url.h>
@@ -38,11 +28,20 @@
 #define SUBTITLE_DEFAULT_TEXT "subtitle-default-text"
 #define SUBTITLE_QUICK_SECONDS "subtitle-quick-seconds"
 #define SUBTITLE_AUTORELOAD "subtitle-autoreload"
+#define SUBTITLE_MODEL "subtitle-model"
+#define SUBTITLE_LANGUAGE "subtitle-language"
+#define SUBTITLE_MODEL_STATUS_CODE "subtitle-model-status-code"
+#define SUBTITLE_RUNTIME_STATE "subtitle-runtime-state"
+#define SUBTITLE_RUNTIME_STATUS "subtitle-runtime-status"
 
 #define SUBTITLE_KEY_START "subtitle-key-start"
 #define SUBTITLE_KEY_END "subtitle-key-end"
 #define SUBTITLE_KEY_QUICK "subtitle-key-quick"
 #define SUBTITLE_KEY_RELOAD "subtitle-key-reload"
+
+#ifndef SUBTITLE_SHORTNAME
+# define SUBTITLE_SHORTNAME "Subtitle Offline"
+#endif
 
 #define KEY_LEFT_BRACKET 0x0000005b
 #define KEY_RIGHT_BRACKET 0x0000005d
@@ -57,66 +56,135 @@ static int PlaylistEvent(vlc_object_t *, char const *, vlc_value_t,
                          vlc_value_t, void *);
 static int InputEvent(vlc_object_t *, char const *, vlc_value_t,
                       vlc_value_t, void *);
+static int ModelStatusEvent(vlc_object_t *, char const *, vlc_value_t,
+                            vlc_value_t, void *);
 
 static void ChangeInput(intf_thread_t *, input_thread_t *);
 static void ChangeVout(intf_thread_t *, vout_thread_t *);
+static void PollModelSelection(void *);
+
+enum model_status
+{
+    MODEL_STATUS_NOT_DOWNLOADED,
+    MODEL_STATUS_LOADING_CACHE,
+    MODEL_STATUS_DOWNLOADING_TOKENIZER,
+    MODEL_STATUS_DOWNLOADING_MODEL,
+    MODEL_STATUS_INITIALIZING,
+    MODEL_STATUS_READY,
+    MODEL_STATUS_COUNT,
+};
+
+static void SetModelStatus(intf_thread_t *, enum model_status);
+
+static const char *const model_values[] = {
+    "pocket-tts",
+    "kitten-tts",
+};
+
+static const char *const model_labels[] = {
+    N_("Pocket TTS (128 MB)"),
+    N_("KittenTTS (~45 MB)"),
+};
+
+static const char *const language_values[] = {
+    "alba",
+    "azelma",
+    "cosette",
+    "eponine",
+    "fantine",
+    "javert",
+    "jean",
+    "marius",
+};
+
+static const char *const language_labels[] = {
+    N_("alba"),
+    N_("azelma"),
+    N_("cosette"),
+    N_("eponine"),
+    N_("fantine"),
+    N_("javert"),
+    N_("jean"),
+    N_("marius"),
+};
 
 vlc_module_begin()
     set_text_domain(DOMAIN)
-    set_shortname(N_("Subtitle Offline"))
-    set_description(N_("Create SRT subtitles while playing media"))
-    set_help(N_("<sup><b>vlc-subtitle</b></sup><br/>"
-                "Use [ to mark subtitle start, ] to mark subtitle end and "
-                "append a cue, \\ to create a quick cue for the previous "
-                "few seconds, and F8 to reload the generated subtitle file."))
+    set_shortname(N_(SUBTITLE_SHORTNAME))
+    set_description(N_("Offline subtitle model and language"))
     set_capability("interface", 0)
     set_category(CAT_INTERFACE)
     set_subcategory(SUBCAT_INTERFACE_CONTROL)
+
+    set_section(N_("Settings · Model"), NULL)
+    add_string(SUBTITLE_MODEL, "pocket-tts",
+               N_("Model"),
+               N_("Offline model used for subtitle speech."),
+               false)
+        change_string_list(model_values, model_labels)
+
+    set_section(N_("Status"), NULL)
+
+    set_section(N_("Language"), NULL)
+    add_string(SUBTITLE_LANGUAGE, "alba",
+               N_("Language"),
+               N_("Language used by the selected model."),
+               false)
+        change_string_list(language_values, language_labels)
 
     add_savefile(SUBTITLE_OUTPUT, "",
                  N_("Subtitle output file"),
                  N_("SRT file where new subtitle cues will be appended."),
                  false)
+        change_private()
     add_loadfile(SUBTITLE_TEXT_SOURCE, "",
                  N_("Subtitle text source"),
                  N_("Optional UTF-8 text file. Each completed cue consumes "
                     "the next non-empty line as subtitle text."),
                  false)
+        change_private()
     add_string(SUBTITLE_DEFAULT_TEXT, "Subtitle",
                N_("Fallback subtitle text"),
                N_("Text used when the subtitle text source is empty or unset."),
                false)
+        change_private()
     add_integer_with_range(SUBTITLE_QUICK_SECONDS, 4, 1, 120,
                            N_("Quick cue duration"),
                            N_("Number of previous seconds used by the quick "
                               "cue shortcut."),
                            false)
+        change_private()
     add_bool(SUBTITLE_AUTORELOAD, true,
              N_("Attach generated subtitle to the current input"),
              N_("Automatically load the generated SRT file into the playing "
                 "media after a cue is written."),
              false)
+        change_private()
 
     add_integer(SUBTITLE_KEY_START, KEY_LEFT_BRACKET,
                 N_("Set subtitle start key code"),
                 N_("VLC key code used to mark current playback time as the "
                    "start of the next subtitle cue."),
                 false)
+        change_private()
     add_integer(SUBTITLE_KEY_END, KEY_RIGHT_BRACKET,
                 N_("Set subtitle end key code"),
                 N_("VLC key code used to mark current playback time as the end "
                    "of the cue and append it to the SRT."),
                 false)
+        change_private()
     add_integer(SUBTITLE_KEY_QUICK, KEY_BACKSLASH,
                 N_("Create quick subtitle cue key code"),
                 N_("VLC key code used to append a cue covering the previous "
                    "quick-cue duration."),
                 false)
+        change_private()
     add_integer(SUBTITLE_KEY_RELOAD, KEY_F8,
                 N_("Reload generated subtitle key code"),
                 N_("VLC key code used to attach the generated SRT file to the "
                    "current input."),
                 false)
+        change_private()
 
     set_callbacks(Open, Close)
 vlc_module_end()
@@ -130,6 +198,9 @@ struct intf_sys_t
     unsigned cue_count;
     unsigned text_line;
     bool subtitle_attached;
+    vlc_timer_t status_timer;
+    bool status_timer_created;
+    char *selected_model;
 };
 
 static bool is_empty_string(const char *value)
@@ -225,6 +296,71 @@ static void ShowMessage(intf_thread_t *intf, const char *text)
     }
 
     msg_Info(intf, "%s", text);
+}
+
+static void PollModelSelection(void *data)
+{
+    intf_thread_t *intf = data;
+    intf_sys_t *sys = intf->p_sys;
+
+    char *model = config_GetPsz(intf, SUBTITLE_MODEL);
+    if (is_empty_string(model))
+    {
+        free(model);
+        model = strdup("pocket-tts");
+    }
+
+    if (model != NULL &&
+        (sys->selected_model == NULL ||
+         strcmp(model, sys->selected_model) != 0))
+    {
+        free(sys->selected_model);
+        sys->selected_model = model;
+        SetModelStatus(intf, MODEL_STATUS_NOT_DOWNLOADED);
+    }
+    else
+        free(model);
+}
+
+static void SetModelStatus(intf_thread_t *intf, enum model_status status)
+{
+    const char *state;
+    const char *message;
+
+    switch (status)
+    {
+        case MODEL_STATUS_NOT_DOWNLOADED:
+            state = "error";
+            message = "Model not downloaded";
+            break;
+        case MODEL_STATUS_LOADING_CACHE:
+            state = "loading";
+            message = "Loading from cache...";
+            break;
+        case MODEL_STATUS_DOWNLOADING_TOKENIZER:
+            state = "loading";
+            message = "Downloading tokenizer";
+            break;
+        case MODEL_STATUS_DOWNLOADING_MODEL:
+            state = "loading";
+            message = "Downloading model";
+            break;
+        case MODEL_STATUS_INITIALIZING:
+            state = "loading";
+            message = "Initializing model...";
+            break;
+        case MODEL_STATUS_READY:
+            state = "ready";
+            message = "Ready";
+            break;
+        default:
+            vlc_assert_unreachable();
+    }
+
+    var_SetString(intf->obj.libvlc, SUBTITLE_RUNTIME_STATE, state);
+    var_SetString(intf->obj.libvlc, SUBTITLE_RUNTIME_STATUS, message);
+
+    msg_Info(intf, "model status [%s]: %s", state, message);
 }
 
 static char *read_next_text_line(intf_thread_t *intf)
@@ -428,10 +564,34 @@ static int Open(vlc_object_t *this)
     sys->cue_start = -1;
     intf->p_sys = sys;
 
+    var_Create(intf->obj.libvlc, SUBTITLE_MODEL_STATUS_CODE,
+               VLC_VAR_INTEGER | VLC_VAR_ISCOMMAND);
+    var_AddCallback(intf->obj.libvlc, SUBTITLE_MODEL_STATUS_CODE,
+                    ModelStatusEvent, intf);
+    var_Create(intf->obj.libvlc, SUBTITLE_RUNTIME_STATE, VLC_VAR_STRING);
+    var_Create(intf->obj.libvlc, SUBTITLE_RUNTIME_STATUS, VLC_VAR_STRING);
+
+    sys->selected_model = config_GetPsz(intf, SUBTITLE_MODEL);
+    if (is_empty_string(sys->selected_model))
+    {
+        free(sys->selected_model);
+        sys->selected_model = strdup("pocket-tts");
+    }
+
+    if (vlc_timer_create(&sys->status_timer, PollModelSelection, intf) == 0)
+        sys->status_timer_created = true;
+    else
+        msg_Warn(intf, "could not create model selection timer");
+
     var_AddCallback(intf->obj.libvlc, "key-pressed", KeyboardEvent, intf);
     var_AddCallback(pl_Get(intf), "input-current", PlaylistEvent, intf);
 
-    msg_Info(intf, "vlc-subtitle module loaded");
+    var_SetInteger(intf->obj.libvlc, SUBTITLE_MODEL_STATUS_CODE,
+                   MODEL_STATUS_NOT_DOWNLOADED);
+    if (sys->status_timer_created)
+        vlc_timer_schedule(sys->status_timer, false, VLC_TICK_FROM_MS(100),
+                           VLC_TICK_FROM_MS(500));
+
     return VLC_SUCCESS;
 }
 
@@ -440,14 +600,37 @@ static void Close(vlc_object_t *this)
     intf_thread_t *intf = (intf_thread_t *)this;
     intf_sys_t *sys = intf->p_sys;
 
+    if (sys->status_timer_created)
+        vlc_timer_destroy(sys->status_timer);
+
     var_DelCallback(pl_Get(intf), "input-current", PlaylistEvent, intf);
     var_DelCallback(intf->obj.libvlc, "key-pressed", KeyboardEvent, intf);
 
     ChangeInput(intf, NULL);
+    var_Destroy(intf->obj.libvlc, SUBTITLE_RUNTIME_STATUS);
+    var_Destroy(intf->obj.libvlc, SUBTITLE_RUNTIME_STATE);
+    var_DelCallback(intf->obj.libvlc, SUBTITLE_MODEL_STATUS_CODE,
+                    ModelStatusEvent, intf);
+    var_Destroy(intf->obj.libvlc, SUBTITLE_MODEL_STATUS_CODE);
+    free(sys->selected_model);
     vlc_mutex_destroy(&sys->lock);
     free(sys);
 
     msg_Info(intf, "vlc-subtitle module unloaded");
+}
+
+static int ModelStatusEvent(vlc_object_t *object, char const *var_name,
+                            vlc_value_t old_value, vlc_value_t new_value,
+                            void *data)
+{
+    VLC_UNUSED(object);
+    VLC_UNUSED(var_name);
+    VLC_UNUSED(old_value);
+
+    if (new_value.i_int >= 0 && new_value.i_int < MODEL_STATUS_COUNT)
+        SetModelStatus(data, (enum model_status)new_value.i_int);
+
+    return VLC_SUCCESS;
 }
 
 static int KeyboardEvent(vlc_object_t *libvlc, char const *var_name,
