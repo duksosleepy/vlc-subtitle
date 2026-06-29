@@ -2,14 +2,22 @@
 
 `vlc-subtitle` builds only for Linux 64-bit and Windows 64-bit.
 
-You need the libVLC plugin SDK headers/pkg-config files and a C compiler.
+You need the libVLC plugin SDK headers/pkg-config files, CMake, and C/C++
+compilers. whisper.cpp is pinned as a Git submodule under
+`runtime/whisper.cpp`.
+
+Initialize dependencies after cloning:
+
+```sh
+git submodule update --init --recursive
+```
 
 ## Linux 64-bit
 
 On Debian/Ubuntu:
 
 ```sh
-sudo apt-get install libvlc-dev libvlccore-dev gcc make pkg-config
+sudo apt-get install libvlc-dev libvlccore-dev gcc g++ cmake make pkg-config
 make
 sudo make install
 ```
@@ -27,7 +35,8 @@ Use MSYS2 MinGW 64-bit.
 Install the toolchain:
 
 ```sh
-pacman -S base-devel mingw-w64-x86_64-toolchain pkg-config
+pacman -S base-devel mingw-w64-x86_64-toolchain \
+  mingw-w64-x86_64-cmake pkg-config
 ```
 
 Download the 64-bit VLC `.7z` package from VideoLAN and extract its `sdk`
@@ -38,7 +47,9 @@ cd /path/to/vlc-*/sdk
 sed -i "s|^prefix=.*|prefix=${PWD}|g" lib/pkgconfig/*.pc
 export PKG_CONFIG_PATH="${PWD}/lib/pkgconfig"
 cd /path/to/vlc-subtitle
-make OS=Windows_NT CC=x86_64-w64-mingw32-gcc
+make OS=Windows_NT \
+  CC=x86_64-w64-mingw32-gcc \
+  CXX=x86_64-w64-mingw32-g++
 ```
 
 The Windows build produces:
@@ -46,6 +57,18 @@ The Windows build produces:
 ```text
 libsuboffline_plugin.dll
 ```
+
+## Optional Vulkan backend
+
+CPU inference is the default build because it has the smallest runtime
+dependency surface. To compile whisper.cpp with Vulkan support:
+
+```sh
+make VLC_SUBTITLE_VULKAN=ON
+```
+
+This requires the Vulkan SDK and `glslc`. The `Use GPU acceleration` preference
+only has an effect when the selected runtime was built with a GPU backend.
 
 ## Docker 64-bit Builds
 

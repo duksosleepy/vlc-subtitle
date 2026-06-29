@@ -15,7 +15,9 @@
 
 #include <vlc_common.h>
 #include <vlc_actions.h>
+#include <vlc_aout.h>
 #include <vlc_configuration.h>
+#include <vlc_filter.h>
 #include <vlc_input.h>
 #include <vlc_interface.h>
 #include <vlc_mtime.h>
@@ -23,16 +25,26 @@
 #include <vlc_plugin.h>
 #include <vlc_url.h>
 
+#include "runtime.h"
+
 #define SUBTITLE_OUTPUT "subtitle-output"
 #define SUBTITLE_TEXT_SOURCE "subtitle-text-source"
 #define SUBTITLE_DEFAULT_TEXT "subtitle-default-text"
 #define SUBTITLE_QUICK_SECONDS "subtitle-quick-seconds"
 #define SUBTITLE_AUTORELOAD "subtitle-autoreload"
-#define SUBTITLE_MODEL "subtitle-model"
-#define SUBTITLE_LANGUAGE "subtitle-language"
+#define SUBTITLE_BACKEND "subtitle-stt-runtime"
+#define SUBTITLE_MODEL "subtitle-stt-model"
+#define SUBTITLE_LANGUAGE "subtitle-stt-language"
+#define SUBTITLE_TRANSLATE "subtitle-translate"
+#define SUBTITLE_THREADS "subtitle-threads"
+#define SUBTITLE_CHUNK_MS "subtitle-chunk-ms"
+#define SUBTITLE_USE_GPU "subtitle-use-gpu"
+#define SUBTITLE_STATUS_DISPLAY "subtitle-status-display"
 #define SUBTITLE_MODEL_STATUS_CODE "subtitle-model-status-code"
 #define SUBTITLE_RUNTIME_STATE "subtitle-runtime-state"
 #define SUBTITLE_RUNTIME_STATUS "subtitle-runtime-status"
+#define SUBTITLE_RUNTIME_RESULT "subtitle-runtime-result"
+#define SUBTITLE_FILTER_NAME "suboffline_runtime"
 
 #define SUBTITLE_KEY_START "subtitle-key-start"
 #define SUBTITLE_KEY_END "subtitle-key-end"
@@ -49,6 +61,8 @@
 
 static int Open(vlc_object_t *);
 static void Close(vlc_object_t *);
+static int OpenRuntimeFilter(vlc_object_t *);
+static void CloseRuntimeFilter(vlc_object_t *);
 
 static int KeyboardEvent(vlc_object_t *, char const *, vlc_value_t,
                          vlc_value_t, void *);
@@ -56,12 +70,13 @@ static int PlaylistEvent(vlc_object_t *, char const *, vlc_value_t,
                          vlc_value_t, void *);
 static int InputEvent(vlc_object_t *, char const *, vlc_value_t,
                       vlc_value_t, void *);
+static int RuntimeResultEvent(vlc_object_t *, char const *, vlc_value_t,
+                              vlc_value_t, void *);
 static int ModelStatusEvent(vlc_object_t *, char const *, vlc_value_t,
                             vlc_value_t, void *);
 
 static void ChangeInput(intf_thread_t *, input_thread_t *);
 static void ChangeVout(intf_thread_t *, vout_thread_t *);
-static void PollModelSelection(void *);
 
 enum model_status
 {
@@ -76,61 +91,74 @@ enum model_status
 
 static void SetModelStatus(intf_thread_t *, enum model_status);
 
-static const char *const model_values[] = {
-    "pocket-tts",
-    "kitten-tts",
-};
-
-static const char *const model_labels[] = {
-    N_("Pocket TTS (128 MB)"),
-    N_("KittenTTS (~45 MB)"),
-};
-
 static const char *const language_values[] = {
-    "alba",
-    "azelma",
-    "cosette",
-    "eponine",
-    "fantine",
-    "javert",
-    "jean",
-    "marius",
+    "auto", "en", "vi", "zh", "ja", "ko", "es", "fr", "de", "it",
+    "pt", "ru", "ar", "hi", "th", "id", "tr", "uk", "nl", "pl",
 };
 
 static const char *const language_labels[] = {
-    N_("alba"),
-    N_("azelma"),
-    N_("cosette"),
-    N_("eponine"),
-    N_("fantine"),
-    N_("javert"),
-    N_("jean"),
-    N_("marius"),
+    N_("Auto detect"), N_("English"), N_("Vietnamese"), N_("Chinese"),
+    N_("Japanese"), N_("Korean"), N_("Spanish"), N_("French"),
+    N_("German"), N_("Italian"), N_("Portuguese"), N_("Russian"),
+    N_("Arabic"), N_("Hindi"), N_("Thai"), N_("Indonesian"),
+    N_("Turkish"), N_("Ukrainian"), N_("Dutch"), N_("Polish"),
+};
+
+static const char *const runtime_values[] = {
+    "whisper",
+};
+
+static const char *const runtime_labels[] = {
+    N_("whisper.cpp"),
 };
 
 vlc_module_begin()
     set_text_domain(DOMAIN)
     set_shortname(N_(SUBTITLE_SHORTNAME))
-    set_description(N_("Offline subtitle model and language"))
+    set_description(N_("Offline speech-to-text subtitles with whisper.cpp"))
     set_capability("interface", 0)
     set_category(CAT_INTERFACE)
     set_subcategory(SUBCAT_INTERFACE_CONTROL)
 
     set_section(N_("Settings · Model"), NULL)
-    add_string(SUBTITLE_MODEL, "pocket-tts",
-               N_("Model"),
-               N_("Offline model used for subtitle speech."),
-               false)
-        change_string_list(model_values, model_labels)
+    add_string(SUBTITLE_BACKEND, "whisper",
+               N_("STT runtime"),
+               N_("Speech-to-text inference backend."), false)
+        change_string_list(runtime_values, runtime_labels)
+    add_loadfile(SUBTITLE_MODEL, "",
+                 N_("STT model file"),
+                 N_("Local model for the selected runtime. whisper.cpp uses "
+                    "GGML/GGUF models such as ggml-base.bin."),
+                 false)
+    add_integer_with_range(SUBTITLE_THREADS, 4, 1, 32,
+                           N_("Inference threads"),
+                           N_("CPU threads used by whisper.cpp."), false)
+    add_integer_with_range(SUBTITLE_CHUNK_MS, 5000, 1000, 30000,
+                           N_("Transcription chunk length (ms)"),
+                           N_("Audio accumulated before each STT inference. "
+                              "Shorter chunks reduce latency but may reduce "
+                              "accuracy."), false)
+    add_bool(SUBTITLE_USE_GPU, true,
+             N_("Use GPU acceleration"),
+             N_("Use a GPU backend when the selected runtime provides one."),
+             false)
 
     set_section(N_("Status"), NULL)
+    add_string(SUBTITLE_STATUS_DISPLAY, "Model not downloaded",
+               N_("Status"),
+               N_("Current status of the selected model."), false)
+        vlc_config_set(VLC_CONFIG_VOLATILE);
 
     set_section(N_("Language"), NULL)
-    add_string(SUBTITLE_LANGUAGE, "alba",
-               N_("Language"),
-               N_("Language used by the selected model."),
+    add_string(SUBTITLE_LANGUAGE, "auto",
+               N_("Spoken language"),
+               N_("Language in the playback audio. Auto detection is slower."),
                false)
         change_string_list(language_values, language_labels)
+    add_bool(SUBTITLE_TRANSLATE, false,
+             N_("Translate speech to English"),
+             N_("Ask Whisper to translate recognized speech to English."),
+             false)
 
     add_savefile(SUBTITLE_OUTPUT, "",
                  N_("Subtitle output file"),
@@ -187,20 +215,41 @@ vlc_module_begin()
         change_private()
 
     set_callbacks(Open, Close)
+
+    add_submodule()
+        set_shortname(N_("Subtitle runtime capture"))
+        set_description(N_("PCM capture for offline STT runtimes"))
+        set_subcategory(SUBCAT_AUDIO_AFILTER)
+        set_capability("audio filter", 0)
+        add_shortcut(SUBTITLE_FILTER_NAME)
+        set_callbacks(OpenRuntimeFilter, CloseRuntimeFilter)
 vlc_module_end()
+
+struct subtitle_runtime_result
+{
+    int64_t start;
+    int64_t end;
+    const char *text;
+};
+
+struct filter_sys_t
+{
+    subtitle_runtime_t *runtime;
+    unsigned channels;
+    unsigned sample_rate;
+    bool warned_backlog;
+};
 
 struct intf_sys_t
 {
     vlc_mutex_t lock;
+    vlc_mutex_t cue_lock;
     input_thread_t *input;
     vout_thread_t *vout;
     int64_t cue_start;
     unsigned cue_count;
     unsigned text_line;
     bool subtitle_attached;
-    vlc_timer_t status_timer;
-    bool status_timer_created;
-    char *selected_model;
 };
 
 static bool is_empty_string(const char *value)
@@ -298,28 +347,13 @@ static void ShowMessage(intf_thread_t *intf, const char *text)
     msg_Info(intf, "%s", text);
 }
 
-static void PollModelSelection(void *data)
+static void RuntimeResult(void *opaque, int64_t start, int64_t end,
+                          const char *text)
 {
-    intf_thread_t *intf = data;
-    intf_sys_t *sys = intf->p_sys;
-
-    char *model = config_GetPsz(intf, SUBTITLE_MODEL);
-    if (is_empty_string(model))
-    {
-        free(model);
-        model = strdup("pocket-tts");
-    }
-
-    if (model != NULL &&
-        (sys->selected_model == NULL ||
-         strcmp(model, sys->selected_model) != 0))
-    {
-        free(sys->selected_model);
-        sys->selected_model = model;
-        SetModelStatus(intf, MODEL_STATUS_NOT_DOWNLOADED);
-    }
-    else
-        free(model);
+    filter_t *filter = opaque;
+    const struct subtitle_runtime_result result = { start, end, text };
+    var_SetAddress(filter->obj.libvlc, SUBTITLE_RUNTIME_RESULT,
+                   (void *)&result);
 }
 
 static void SetModelStatus(intf_thread_t *intf, enum model_status status)
@@ -359,8 +393,127 @@ static void SetModelStatus(intf_thread_t *intf, enum model_status status)
 
     var_SetString(intf->obj.libvlc, SUBTITLE_RUNTIME_STATE, state);
     var_SetString(intf->obj.libvlc, SUBTITLE_RUNTIME_STATUS, message);
-
+    config_PutPsz(intf, SUBTITLE_STATUS_DISPLAY, message);
     msg_Info(intf, "model status [%s]: %s", state, message);
+}
+
+static void RuntimeStatus(void *opaque, const char *state,
+                          const char *message)
+{
+    filter_t *filter = opaque;
+
+    if (strcmp(state, "loading") == 0)
+    {
+        var_SetInteger(filter->obj.libvlc, SUBTITLE_MODEL_STATUS_CODE,
+                       MODEL_STATUS_INITIALIZING);
+        return;
+    }
+    if (strcmp(state, "ready") == 0)
+    {
+        var_SetInteger(filter->obj.libvlc, SUBTITLE_MODEL_STATUS_CODE,
+                       MODEL_STATUS_READY);
+        return;
+    }
+    if (strcmp(state, "error") == 0)
+    {
+        var_SetInteger(filter->obj.libvlc, SUBTITLE_MODEL_STATUS_CODE,
+                       MODEL_STATUS_NOT_DOWNLOADED);
+        return;
+    }
+
+    var_SetString(filter->obj.libvlc, SUBTITLE_RUNTIME_STATE, state);
+    var_SetString(filter->obj.libvlc, SUBTITLE_RUNTIME_STATUS, message);
+    config_PutPsz(filter, SUBTITLE_STATUS_DISPLAY, message);
+    msg_Info(filter, "STT runtime [%s]: %s", state, message);
+}
+
+static block_t *ProcessRuntimeAudio(filter_t *filter, block_t *block)
+{
+    filter_sys_t *sys = filter->p_sys;
+    const int64_t pts = block->i_pts == VLC_TICK_INVALID
+                      ? INT64_MIN : block->i_pts;
+
+    if (!subtitle_runtime_push(sys->runtime, (const float *)block->p_buffer,
+                               block->i_nb_samples, sys->channels,
+                               sys->sample_rate, pts) && !sys->warned_backlog)
+    {
+        msg_Warn(filter, "STT runtime is not accepting audio; dropping audio");
+        sys->warned_backlog = true;
+    }
+    return block;
+}
+
+static void FlushRuntimeAudio(filter_t *filter)
+{
+    filter_sys_t *sys = filter->p_sys;
+    subtitle_runtime_flush(sys->runtime);
+    sys->warned_backlog = false;
+}
+
+static void CloseRuntimeFilter(vlc_object_t *object)
+{
+    filter_t *filter = (filter_t *)object;
+    filter_sys_t *sys = filter->p_sys;
+    subtitle_runtime_destroy(sys->runtime);
+    free(sys);
+}
+
+static int OpenRuntimeFilter(vlc_object_t *object)
+{
+    filter_t *filter = (filter_t *)object;
+    char *model = var_InheritString(filter, SUBTITLE_MODEL);
+    if (is_empty_string(model))
+    {
+        free(model);
+        RuntimeStatus(filter, "error",
+                      "Set a local STT model file in preferences");
+        return VLC_EGENERIC;
+    }
+
+    char *language = var_InheritString(filter, SUBTITLE_LANGUAGE);
+    char *backend = var_InheritString(filter, SUBTITLE_BACKEND);
+    filter_sys_t *sys = calloc(1, sizeof(*sys));
+    if (sys == NULL)
+    {
+        free(backend);
+        free(language);
+        free(model);
+        return VLC_ENOMEM;
+    }
+
+    filter->fmt_in.audio.i_format = VLC_CODEC_FL32;
+    filter->fmt_in.i_codec = VLC_CODEC_FL32;
+    aout_FormatPrepare(&filter->fmt_in.audio);
+    filter->fmt_out.audio = filter->fmt_in.audio;
+    filter->fmt_out.i_codec = VLC_CODEC_FL32;
+
+    sys->channels = filter->fmt_in.audio.i_channels;
+    sys->sample_rate = filter->fmt_in.audio.i_rate;
+
+    const subtitle_runtime_config_t config = {
+        .backend = is_empty_string(backend) ? "whisper" : backend,
+        .model_path = model,
+        .language = is_empty_string(language) ? "auto" : language,
+        .threads = (int)var_InheritInteger(filter, SUBTITLE_THREADS),
+        .chunk_ms = (int)var_InheritInteger(filter, SUBTITLE_CHUNK_MS),
+        .translate = var_InheritBool(filter, SUBTITLE_TRANSLATE),
+        .use_gpu = var_InheritBool(filter, SUBTITLE_USE_GPU),
+    };
+    sys->runtime = subtitle_runtime_create(&config, RuntimeResult,
+                                            RuntimeStatus, filter);
+    free(backend);
+    free(language);
+    free(model);
+    if (sys->runtime == NULL)
+    {
+        free(sys);
+        return VLC_EGENERIC;
+    }
+
+    filter->p_sys = sys;
+    filter->pf_audio_filter = ProcessRuntimeAudio;
+    filter->pf_flush = FlushRuntimeAudio;
+    return VLC_SUCCESS;
 }
 
 static char *read_next_text_line(intf_thread_t *intf)
@@ -454,12 +607,14 @@ static int append_srt_cue(intf_thread_t *intf, const char *path, int64_t start,
                           int64_t end, const char *text)
 {
     intf_sys_t *sys = intf->p_sys;
+    vlc_mutex_lock(&sys->cue_lock);
     FILE *file = fopen(path, "ab");
 
     if (file == NULL)
     {
         msg_Err(intf, "cannot open subtitle output '%s': %s", path,
                 vlc_strerror_c(errno));
+        vlc_mutex_unlock(&sys->cue_lock);
         return VLC_EGENERIC;
     }
 
@@ -479,9 +634,11 @@ static int append_srt_cue(intf_thread_t *intf, const char *path, int64_t start,
     {
         msg_Err(intf, "cannot write subtitle output '%s': %s", path,
                 vlc_strerror_c(errno));
+        vlc_mutex_unlock(&sys->cue_lock);
         return VLC_EGENERIC;
     }
 
+    vlc_mutex_unlock(&sys->cue_lock);
     return VLC_SUCCESS;
 }
 
@@ -561,6 +718,7 @@ static int Open(vlc_object_t *this)
         return VLC_ENOMEM;
 
     vlc_mutex_init(&sys->lock);
+    vlc_mutex_init(&sys->cue_lock);
     sys->cue_start = -1;
     intf->p_sys = sys;
 
@@ -570,27 +728,22 @@ static int Open(vlc_object_t *this)
                     ModelStatusEvent, intf);
     var_Create(intf->obj.libvlc, SUBTITLE_RUNTIME_STATE, VLC_VAR_STRING);
     var_Create(intf->obj.libvlc, SUBTITLE_RUNTIME_STATUS, VLC_VAR_STRING);
-
-    sys->selected_model = config_GetPsz(intf, SUBTITLE_MODEL);
-    if (is_empty_string(sys->selected_model))
-    {
-        free(sys->selected_model);
-        sys->selected_model = strdup("pocket-tts");
-    }
-
-    if (vlc_timer_create(&sys->status_timer, PollModelSelection, intf) == 0)
-        sys->status_timer_created = true;
-    else
-        msg_Warn(intf, "could not create model selection timer");
+    var_Create(intf->obj.libvlc, SUBTITLE_RUNTIME_RESULT, VLC_VAR_ADDRESS);
+    var_AddCallback(intf->obj.libvlc, SUBTITLE_RUNTIME_RESULT,
+                    RuntimeResultEvent, intf);
 
     var_AddCallback(intf->obj.libvlc, "key-pressed", KeyboardEvent, intf);
     var_AddCallback(pl_Get(intf), "input-current", PlaylistEvent, intf);
 
     var_SetInteger(intf->obj.libvlc, SUBTITLE_MODEL_STATUS_CODE,
                    MODEL_STATUS_NOT_DOWNLOADED);
-    if (sys->status_timer_created)
-        vlc_timer_schedule(sys->status_timer, false, VLC_TICK_FROM_MS(100),
-                           VLC_TICK_FROM_MS(500));
+
+    input_thread_t *input = playlist_CurrentInput(pl_Get(intf));
+    if (input != NULL)
+    {
+        ChangeInput(intf, input);
+        vlc_object_release(input);
+    }
 
     return VLC_SUCCESS;
 }
@@ -600,19 +753,19 @@ static void Close(vlc_object_t *this)
     intf_thread_t *intf = (intf_thread_t *)this;
     intf_sys_t *sys = intf->p_sys;
 
-    if (sys->status_timer_created)
-        vlc_timer_destroy(sys->status_timer);
-
     var_DelCallback(pl_Get(intf), "input-current", PlaylistEvent, intf);
     var_DelCallback(intf->obj.libvlc, "key-pressed", KeyboardEvent, intf);
 
     ChangeInput(intf, NULL);
+    var_DelCallback(intf->obj.libvlc, SUBTITLE_RUNTIME_RESULT,
+                    RuntimeResultEvent, intf);
+    var_Destroy(intf->obj.libvlc, SUBTITLE_RUNTIME_RESULT);
     var_Destroy(intf->obj.libvlc, SUBTITLE_RUNTIME_STATUS);
     var_Destroy(intf->obj.libvlc, SUBTITLE_RUNTIME_STATE);
     var_DelCallback(intf->obj.libvlc, SUBTITLE_MODEL_STATUS_CODE,
                     ModelStatusEvent, intf);
     var_Destroy(intf->obj.libvlc, SUBTITLE_MODEL_STATUS_CODE);
-    free(sys->selected_model);
+    vlc_mutex_destroy(&sys->cue_lock);
     vlc_mutex_destroy(&sys->lock);
     free(sys);
 
@@ -629,6 +782,42 @@ static int ModelStatusEvent(vlc_object_t *object, char const *var_name,
 
     if (new_value.i_int >= 0 && new_value.i_int < MODEL_STATUS_COUNT)
         SetModelStatus(data, (enum model_status)new_value.i_int);
+
+    return VLC_SUCCESS;
+}
+
+static int RuntimeResultEvent(vlc_object_t *object, char const *var_name,
+                              vlc_value_t old_value, vlc_value_t new_value,
+                              void *data)
+{
+    VLC_UNUSED(object);
+    VLC_UNUSED(var_name);
+    VLC_UNUSED(old_value);
+
+    const struct subtitle_runtime_result *result = new_value.p_address;
+    if (result == NULL || is_empty_string(result->text))
+        return VLC_SUCCESS;
+
+    intf_thread_t *intf = data;
+    intf_sys_t *sys = intf->p_sys;
+    vlc_mutex_lock(&sys->lock);
+    input_thread_t *input = sys->input ? vlc_object_hold(sys->input) : NULL;
+    vlc_mutex_unlock(&sys->lock);
+
+    char *path = get_output_path(intf);
+    if (path != NULL &&
+        append_srt_cue(intf, path, result->start, result->end,
+                       result->text) == VLC_SUCCESS)
+    {
+        ShowMessage(intf, result->text);
+        if (input != NULL && var_InheritBool(intf, SUBTITLE_AUTORELOAD) &&
+            !sys->subtitle_attached)
+            AttachSubtitle(intf, input, path);
+    }
+
+    free(path);
+    if (input != NULL)
+        vlc_object_release(input);
 
     return VLC_SUCCESS;
 }
@@ -719,6 +908,59 @@ static int PlaylistEvent(vlc_object_t *this, char const *var_name,
     return VLC_SUCCESS;
 }
 
+static void SetAudioFilterEnabled(audio_output_t *aout, const char *name,
+                                  bool enabled)
+{
+    char *current = var_GetString(aout, "audio-filter");
+    if (current == NULL)
+        current = strdup("");
+    if (current == NULL)
+        return;
+
+    const size_t capacity = strlen(current) + strlen(name) + 2;
+    char *updated = calloc(capacity, 1);
+    if (updated == NULL)
+    {
+        free(current);
+        return;
+    }
+
+    bool found = false;
+    const char *cursor = current;
+    while (*cursor != '\0')
+    {
+        while (*cursor == ' ' || *cursor == ':')
+            cursor++;
+        const char *end = cursor;
+        while (*end != '\0' && *end != ' ' && *end != ':')
+            end++;
+
+        const size_t length = (size_t)(end - cursor);
+        const bool matches = length == strlen(name) &&
+                             strncmp(cursor, name, length) == 0;
+        found |= matches;
+        if (length > 0 && (enabled || !matches))
+        {
+            if (updated[0] != '\0')
+                strcat(updated, ":");
+            strncat(updated, cursor, length);
+        }
+        cursor = end;
+    }
+
+    if (enabled && !found)
+    {
+        if (updated[0] != '\0')
+            strcat(updated, ":");
+        strcat(updated, name);
+    }
+
+    if (strcmp(current, updated) != 0)
+        var_SetString(aout, "audio-filter", updated);
+    free(updated);
+    free(current);
+}
+
 static int InputEvent(vlc_object_t *this, char const *var_name,
                       vlc_value_t old_value, vlc_value_t new_value, void *data)
 {
@@ -730,8 +972,30 @@ static int InputEvent(vlc_object_t *this, char const *var_name,
 
     if (new_value.i_int == INPUT_EVENT_VOUT)
         ChangeVout(intf, input_GetVout(input));
+    else if (new_value.i_int == INPUT_EVENT_AOUT)
+    {
+        audio_output_t *aout = input_GetAout(input);
+        if (aout != NULL)
+        {
+            SetAudioFilterEnabled(aout, SUBTITLE_FILTER_NAME, true);
+            vlc_object_release(aout);
+        }
+    }
 
     return VLC_SUCCESS;
+}
+
+static void SetRuntimeFilter(input_thread_t *input, bool enabled)
+{
+    if (input == NULL)
+        return;
+
+    audio_output_t *aout = input_GetAout(input);
+    if (aout != NULL)
+    {
+        SetAudioFilterEnabled(aout, SUBTITLE_FILTER_NAME, enabled);
+        vlc_object_release(aout);
+    }
 }
 
 static void ChangeInput(intf_thread_t *intf, input_thread_t *input)
@@ -742,6 +1006,7 @@ static void ChangeInput(intf_thread_t *intf, input_thread_t *input)
 
     if (old_input != NULL)
     {
+        SetRuntimeFilter(old_input, false);
         var_DelCallback(old_input, "intf-event", InputEvent, intf);
         old_vout = sys->vout;
     }
@@ -759,7 +1024,10 @@ static void ChangeInput(intf_thread_t *intf, input_thread_t *input)
     }
 
     if (input != NULL)
+    {
         var_AddCallback(input, "intf-event", InputEvent, intf);
+        SetRuntimeFilter(input, true);
+    }
 }
 
 static void ChangeVout(intf_thread_t *intf, vout_thread_t *vout)

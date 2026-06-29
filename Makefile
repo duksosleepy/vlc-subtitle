@@ -1,71 +1,58 @@
-CC = cc
-PKG_CONFIG = pkg-config
-INSTALL = install
-CFLAGS = -g -O2 -Wall -Wextra
-LDFLAGS =
-LIBS =
-
-VLC_PLUGIN_CFLAGS := $(shell $(PKG_CONFIG) --cflags vlc-plugin)
-VLC_PLUGIN_LIBS := $(shell $(PKG_CONFIG) --libs vlc-plugin)
-VLC_PLUGIN_DIR := $(shell $(PKG_CONFIG) --variable=pluginsdir vlc-plugin)
-
-plugindir := $(VLC_PLUGIN_DIR)/control
-
-override CC += -std=gnu11
-override CPPFLAGS += -DPIC -I. -Isrc -DMODULE_STRING=\"suboffline\"
-override CFLAGS += -fPIC $(VLC_PLUGIN_CFLAGS)
-override LIBS += $(VLC_PLUGIN_LIBS)
+CMAKE ?= cmake
+PKG_CONFIG ?= pkg-config
+BUILD_DIR ?= build/native
+BUILD_TYPE ?= Release
+WHISPER_SOURCE_DIR ?= $(CURDIR)/runtime/whisper.cpp
+VLC_SUBTITLE_VULKAN ?= OFF
 
 ifeq ($(strip $(OS)),)
-  OS=$(shell uname -s)
+  OS := $(shell uname -s)
 endif
-
-CC_MACHINE := $(shell $(CC) -dumpmachine 2>/dev/null)
 
 ifeq ($(OS),Windows_NT)
   SUFFIX := dll
-  ifeq ($(findstring x86_64,$(CC_MACHINE)),)
-    $(error Windows builds require a 64-bit MinGW compiler, e.g. x86_64-w64-mingw32-gcc)
+  CMAKE_PLATFORM_FLAGS := -DCMAKE_SYSTEM_NAME=Windows
+  ifneq ($(strip $(CC)),)
+    CMAKE_PLATFORM_FLAGS += -DCMAKE_C_COMPILER=$(firstword $(CC))
   endif
-  override LDFLAGS += -Wl,-no-undefined
+  ifneq ($(strip $(CXX)),)
+    CMAKE_PLATFORM_FLAGS += -DCMAKE_CXX_COMPILER=$(firstword $(CXX))
+  endif
 else ifeq ($(OS),Linux)
   SUFFIX := so
-  ifneq ($(shell uname -m),x86_64)
-    $(error Linux builds are supported only on x86_64)
-  endif
-  ifneq ($(findstring -m32,$(CC)),)
-    $(error Linux 32-bit builds are not supported)
-  endif
-  override LDFLAGS += -Wl,-no-undefined
 else
-  $(error Unsupported OS '$(OS)'. vlc-subtitle supports Linux 64-bit and Windows 64-bit)
+  $(error Unsupported OS '$(OS)'. vlc-subtitle supports Linux and Windows)
 endif
 
-TARGET = libsuboffline_plugin.$(SUFFIX)
-SOURCES = subtitle.c
-OBJECTS = $(SOURCES:%.c=src/%.o)
+TARGET := libsuboffline_plugin.$(SUFFIX)
+BUILT_TARGET := $(BUILD_DIR)/plugin/$(TARGET)
+VLC_PLUGIN_DIR := $(shell $(PKG_CONFIG) --variable=pluginsdir vlc-plugin 2>/dev/null)
 
 all: $(TARGET)
 
-install: all
-	mkdir -p -- $(DESTDIR)$(plugindir)
-	$(INSTALL) -m 0755 $(TARGET) $(DESTDIR)$(plugindir)
+configure:
+	$(CMAKE) -S . -B $(BUILD_DIR) \
+		-DCMAKE_BUILD_TYPE=$(BUILD_TYPE) \
+		-DWHISPER_SOURCE_DIR=$(WHISPER_SOURCE_DIR) \
+		-DVLC_SUBTITLE_VULKAN=$(VLC_SUBTITLE_VULKAN) \
+		$(CMAKE_PLATFORM_FLAGS)
 
-install-strip:
-	$(MAKE) install INSTALL="$(INSTALL) -s"
+$(TARGET): configure
+	$(CMAKE) --build $(BUILD_DIR) --target suboffline_plugin --parallel
+	$(CMAKE) -E copy $(BUILT_TARGET) $@
+
+install: $(TARGET)
+	$(CMAKE) --install $(BUILD_DIR)
+
+install-strip: $(TARGET)
+	$(CMAKE) --install $(BUILD_DIR) --strip
 
 uninstall:
-	rm -f -- $(DESTDIR)$(plugindir)/$(TARGET)
+	@test -n "$(VLC_PLUGIN_DIR)" || (echo "VLC plugin directory was not found"; exit 1)
+	$(CMAKE) -E rm -f "$(DESTDIR)$(VLC_PLUGIN_DIR)/control/$(TARGET)"
 
 clean:
-	rm -f -- $(TARGET) libvlcsubtitle_plugin.so libvlcsubtitle_plugin.dll libsubtitle_plugin.so libsubtitle_plugin.dll src/*.o
+	$(CMAKE) -E remove_directory $(BUILD_DIR)
+	$(CMAKE) -E rm -f libsuboffline_plugin.so libsuboffline_plugin.dll
 
-mostlyclean: clean
-
-$(OBJECTS): src/%.o: src/%.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
-
-$(TARGET): $(OBJECTS)
-	$(CC) $(LDFLAGS) -shared -o $@ $^ $(LIBS)
-
-.PHONY: all install install-strip uninstall clean mostlyclean
+.PHONY: all configure install install-strip uninstall clean

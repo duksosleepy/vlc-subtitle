@@ -3,12 +3,15 @@ FROM debian:bookworm-slim
 RUN dpkg --add-architecture amd64 && \
     apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
+        cmake \
         gcc \
+        g++ \
         make \
         pkg-config \
         libvlc-dev:amd64 \
         libvlccore-dev:amd64 \
         gcc-mingw-w64-x86-64 \
+        g++-mingw-w64-x86-64 \
         wget \
         p7zip-full \
     && rm -rf /var/lib/apt/lists/*

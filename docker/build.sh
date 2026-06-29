@@ -8,8 +8,12 @@ build_for_linux() {
     echo
     echo "Building vlc-subtitle for Linux 64-bit..."
     cd /plugin
+    if [[ ! -f runtime/whisper.cpp/CMakeLists.txt ]]; then
+        echo "ERROR: runtime/whisper.cpp is missing; initialize Git submodules first"
+        exit 1
+    fi
     make clean
-    make CC="cc -m64"
+    make CC=cc CXX=c++
     mkdir -p build/linux/64
     cp libsuboffline_plugin.so build/linux/64/
 }
@@ -30,7 +34,9 @@ build_for_windows() {
 
     cd /plugin
     make clean
-    make CC=x86_64-w64-mingw32-gcc OS=Windows_NT
+    make CC=x86_64-w64-mingw32-gcc \
+         CXX=x86_64-w64-mingw32-g++ \
+         OS=Windows_NT
     mkdir -p build/win/64
     cp libsuboffline_plugin.dll build/win/64/
 }
