@@ -1,15 +1,14 @@
 #include "backend.hpp"
+#include "audio_converter.hpp"
 
 #include <whisper.h>
 
 #include <algorithm>
-#include <cmath>
 #include <condition_variable>
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
 #include <deque>
-#include <limits>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -20,15 +19,11 @@
 
 namespace {
 
-constexpr int kWhisperRate = WHISPER_SAMPLE_RATE;
-constexpr int64_t kNoPts = std::numeric_limits<int64_t>::min();
+static_assert(WHISPER_SAMPLE_RATE == kRuntimeSampleRate);
+constexpr int kWhisperRate = kRuntimeSampleRate;
+constexpr int64_t kNoPts = kRuntimeNoPts;
 constexpr int64_t kDiscontinuityUs = 500000;
 constexpr size_t kMaximumBacklogSeconds = 60;
-
-struct AudioPacket {
-    std::vector<float> samples;
-    int64_t pts_us = kNoPts;
-};
 
 std::string trim_text(const char *value)
 {
@@ -49,44 +44,19 @@ std::string trim_text(const char *value)
     return std::string(first, last);
 }
 
-std::vector<float> downmix_and_resample(const float *input, size_t frames,
-                                        unsigned channels,
-                                        unsigned sample_rate,
-                                        double &source_offset)
+bool is_supported_model(const char *model)
 {
-    if (input == nullptr || frames == 0 || channels == 0 || sample_rate == 0)
-        return {};
-
-    std::vector<float> mono(frames);
-    for (size_t frame = 0; frame < frames; ++frame)
-    {
-        float sum = 0.0f;
-        for (unsigned channel = 0; channel < channels; ++channel)
-            sum += input[frame * channels + channel];
-        mono[frame] = sum / static_cast<float>(channels);
-    }
-
-    if (sample_rate == static_cast<unsigned>(kWhisperRate))
-    {
-        source_offset = 0.0;
-        return mono;
-    }
-
-    const double step = static_cast<double>(sample_rate) / kWhisperRate;
-    std::vector<float> output;
-    output.reserve(static_cast<size_t>(std::ceil(frames / step)) + 1);
-
-    while (source_offset < frames)
-    {
-        const double source = std::min<double>(source_offset, frames - 1);
-        const size_t left = static_cast<size_t>(source);
-        const size_t right = std::min(left + 1, frames - 1);
-        const float fraction = static_cast<float>(source - left);
-        output.push_back(mono[left] + (mono[right] - mono[left]) * fraction);
-        source_offset += step;
-    }
-    source_offset -= frames;
-    return output;
+    static const char *const models[] = {
+        "tiny.en", "tiny", "base.en", "base", "small.en", "small",
+        "medium.en", "medium", "large-v1", "large-v2", "large-v3",
+        "large-v3-turbo",
+    };
+    if (model == nullptr)
+        return false;
+    for (const char *candidate : models)
+        if (std::string(model) == candidate)
+            return true;
+    return false;
 }
 
 } // namespace
@@ -107,10 +77,9 @@ public:
 
     std::mutex mutex;
     std::condition_variable condition;
-    std::deque<AudioPacket> queue;
+    std::deque<RuntimeAudioPacket> queue;
     size_t queued_samples = 0;
-    double resample_source_offset = 0.0;
-    unsigned resample_source_rate = 0;
+    RuntimeAudioConverter converter;
     bool stopping = false;
     bool accepting = true;
     bool flush_requested = false;
@@ -213,7 +182,7 @@ public:
 
         for (;;)
         {
-            AudioPacket packet;
+            RuntimeAudioPacket packet;
             bool should_reset = false;
             {
                 std::unique_lock<std::mutex> guard(mutex);
@@ -296,6 +265,13 @@ std::unique_ptr<RuntimeBackend> create_whisper_backend(
     subtitle_runtime_status_cb status_cb,
     void *opaque)
 {
+    if (!is_supported_model(config.model_id))
+    {
+        if (status_cb != nullptr)
+            status_cb(opaque, "error",
+                      "Select a supported whisper.cpp model");
+        return nullptr;
+    }
     if (config.model_path == nullptr || config.model_path[0] == '\0')
         return nullptr;
 
@@ -334,16 +310,9 @@ bool WhisperBackend::push(const float *interleaved, size_t frames,
     std::lock_guard<std::mutex> guard(mutex);
     if (stopping || !accepting)
         return false;
-    if (resample_source_rate != sample_rate)
-    {
-        resample_source_rate = sample_rate;
-        resample_source_offset = 0.0;
-    }
-
-    AudioPacket packet;
-    packet.samples = downmix_and_resample(interleaved, frames, channels,
-                                          sample_rate,
-                                          resample_source_offset);
+    RuntimeAudioPacket packet;
+    packet.samples = converter.convert(interleaved, frames, channels,
+                                       sample_rate);
     packet.pts_us = pts_us;
     if (packet.samples.empty() ||
         queued_samples + packet.samples.size() >
@@ -361,8 +330,7 @@ void WhisperBackend::flush()
         std::lock_guard<std::mutex> guard(mutex);
         queue.clear();
         queued_samples = 0;
-        resample_source_offset = 0.0;
-        resample_source_rate = 0;
+        converter.reset();
         flush_requested = true;
     }
     condition.notify_one();

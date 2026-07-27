@@ -6,10 +6,12 @@ RUN dpkg --add-architecture amd64 && \
         cmake \
         gcc \
         g++ \
+        git \
         make \
         pkg-config \
         libvlc-dev:amd64 \
         libvlccore-dev:amd64 \
+        libopenblas-dev:amd64 \
         gcc-mingw-w64-x86-64 \
         g++-mingw-w64-x86-64 \
         wget \

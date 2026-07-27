@@ -15,7 +15,8 @@ build_for_linux() {
     make clean
     make CC=cc CXX=c++
     mkdir -p build/linux/64
-    cp libsuboffline_plugin.so build/linux/64/
+    cp libsuboffline_plugin.so libparakeet.so libmoonshine.so \
+       libonnxruntime.so.1 build/linux/64/
 }
 
 build_for_windows() {
@@ -38,7 +39,8 @@ build_for_windows() {
          CXX=x86_64-w64-mingw32-g++ \
          OS=Windows_NT
     mkdir -p build/win/64
-    cp libsuboffline_plugin.dll build/win/64/
+    cp libsuboffline_plugin.dll libparakeet.dll libmoonshine.dll \
+       onnxruntime.dll build/win/64/
 }
 
 if [[ ! "$OS" =~ ^(linux|windows|all)$ ]]; then

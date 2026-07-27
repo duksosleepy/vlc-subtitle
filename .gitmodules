@@ -1,3 +1,12 @@
 [submodule "runtime/whisper.cpp"]
 	path = runtime/whisper.cpp
 	url = https://github.com/ggml-org/whisper.cpp.git
+[submodule "runtime/voxtral.c"]
+	path = runtime/voxtral.c
+	url = https://github.com/antirez/voxtral.c.git
+[submodule "runtime/parakeet.cpp"]
+	path = runtime/parakeet.cpp
+	url = https://github.com/mudler/parakeet.cpp.git
+[submodule "runtime/moonshine"]
+	path = runtime/moonshine
+	url = https://github.com/moonshine-ai/moonshine.git

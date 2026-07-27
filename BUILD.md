@@ -2,9 +2,9 @@
 
 `vlc-subtitle` builds only for Linux 64-bit and Windows 64-bit.
 
-You need the libVLC plugin SDK headers/pkg-config files, CMake, and C/C++
-compilers. whisper.cpp is pinned as a Git submodule under
-`runtime/whisper.cpp`.
+You need the libVLC plugin SDK headers/pkg-config files, CMake 3.22.1 or newer,
+and C/C++ compilers. whisper.cpp, voxtral.c, parakeet.cpp, and Moonshine are
+pinned as Git submodules under `runtime/`.
 
 Initialize dependencies after cloning:
 
@@ -17,15 +17,48 @@ git submodule update --init --recursive
 On Debian/Ubuntu:
 
 ```sh
-sudo apt-get install libvlc-dev libvlccore-dev gcc g++ cmake make pkg-config
+sudo apt-get install libvlc-dev libvlccore-dev libopenblas-dev \
+  gcc g++ cmake make pkg-config
 make
 sudo make install
+```
+
+On Arch Linux:
+
+```sh
+sudo pacman -S vlc openblas cmake make pkgconf gcc
+make
+```
+
+OpenBLAS accelerates Voxtral. The build has a portable fallback when OpenBLAS
+is absent, but a 4B model is not practical with those scalar kernels. Disable
+Voxtral explicitly when only whisper.cpp is needed:
+
+```sh
+make VLC_SUBTITLE_VOXTRAL=OFF
+```
+
+Parakeet is enabled on Linux and Windows. Disable it when a single-file plugin
+without `libparakeet` is required:
+
+```sh
+make VLC_SUBTITLE_PARAKEET=OFF
+```
+
+Moonshine is also enabled on Linux and Windows. Disable it to omit its ONNX
+Runtime dependency:
+
+```sh
+make VLC_SUBTITLE_MOONSHINE=OFF
 ```
 
 The native build produces:
 
 ```text
 libsuboffline_plugin.so
+libparakeet.so
+libmoonshine.so
+libonnxruntime.so.1
 ```
 
 ## Windows 64-bit
@@ -56,12 +89,19 @@ The Windows build produces:
 
 ```text
 libsuboffline_plugin.dll
+libparakeet.dll
+libmoonshine.dll
+onnxruntime.dll
 ```
+
+The current voxtral.c loader uses POSIX memory mapping, so the Windows build
+contains the Whisper, Parakeet, and Moonshine runtimes only.
 
 ## Optional Vulkan backend
 
 CPU inference is the default build because it has the smallest runtime
-dependency surface. To compile whisper.cpp with Vulkan support:
+dependency surface. To compile whisper.cpp and parakeet.cpp with Vulkan
+support:
 
 ```sh
 make VLC_SUBTITLE_VULKAN=ON
@@ -83,7 +123,13 @@ Outputs:
 
 ```text
 build/linux/64/libsuboffline_plugin.so
+build/linux/64/libparakeet.so
+build/linux/64/libmoonshine.so
+build/linux/64/libonnxruntime.so.1
 build/win/64/libsuboffline_plugin.dll
+build/win/64/libparakeet.dll
+build/win/64/libmoonshine.dll
+build/win/64/onnxruntime.dll
 ```
 
 You can build just one target:

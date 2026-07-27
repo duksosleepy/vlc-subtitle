@@ -27,10 +27,47 @@ extern "C" subtitle_runtime_t *subtitle_runtime_create(
         if (std::strcmp(config->backend, "whisper") == 0)
             backend = create_whisper_backend(*config, result_cb, status_cb,
                                              opaque);
+#ifdef VLC_SUBTITLE_HAVE_VOXTRAL
+        else if (std::strcmp(config->backend, "voxtral") == 0)
+            backend = create_voxtral_backend(*config, result_cb, status_cb,
+                                             opaque);
+#else
+        else if (std::strcmp(config->backend, "voxtral") == 0)
+        {
+            if (status_cb != nullptr)
+                status_cb(opaque, "error",
+                          "Voxtral is unavailable in this build");
+            return nullptr;
+        }
+#endif
+        else if (std::strcmp(config->backend, "parakeet") == 0)
+        {
+#ifdef VLC_SUBTITLE_HAVE_PARAKEET
+            backend = create_parakeet_backend(*config, result_cb, status_cb,
+                                              opaque);
+#else
+            if (status_cb != nullptr)
+                status_cb(opaque, "error",
+                          "Parakeet is unavailable in this build");
+            return nullptr;
+#endif
+        }
+        else if (std::strcmp(config->backend, "moonshine") == 0)
+        {
+#ifdef VLC_SUBTITLE_HAVE_MOONSHINE
+            backend = create_moonshine_backend(*config, result_cb, status_cb,
+                                               opaque);
+#else
+            if (status_cb != nullptr)
+                status_cb(opaque, "error",
+                          "Moonshine is unavailable in this build");
+            return nullptr;
+#endif
+        }
         else
         {
             if (status_cb != nullptr)
-                status_cb(opaque, "error", "Unknown STT runtime backend");
+                status_cb(opaque, "error", "Unknown STT engine");
             return nullptr;
         }
 
@@ -46,7 +83,7 @@ extern "C" subtitle_runtime_t *subtitle_runtime_create(
     catch (...)
     {
         if (status_cb != nullptr)
-            status_cb(opaque, "error", "Could not create the STT runtime");
+            status_cb(opaque, "error", "Could not create the STT engine");
         return nullptr;
     }
 }

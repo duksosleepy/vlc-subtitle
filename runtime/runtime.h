@@ -14,6 +14,7 @@ typedef struct subtitle_runtime subtitle_runtime_t;
 typedef struct subtitle_runtime_config
 {
     const char *backend;
+    const char *model_id;
     const char *model_path;
     const char *language;
     int threads;

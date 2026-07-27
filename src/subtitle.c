@@ -3,7 +3,6 @@
 #endif
 
 #define DOMAIN "vlc-subtitle"
-#define _(str) dgettext(DOMAIN, str)
 #define N_(str) (str)
 
 #include <errno.h>
@@ -32,8 +31,9 @@
 #define SUBTITLE_DEFAULT_TEXT "subtitle-default-text"
 #define SUBTITLE_QUICK_SECONDS "subtitle-quick-seconds"
 #define SUBTITLE_AUTORELOAD "subtitle-autoreload"
-#define SUBTITLE_BACKEND "subtitle-stt-runtime"
-#define SUBTITLE_MODEL "subtitle-stt-model"
+#define SUBTITLE_ENGINE "subtitle-engine"
+#define SUBTITLE_MODEL_FILE "subtitle-model-file"
+#define SUBTITLE_MODEL_ID "subtitle-model"
 #define SUBTITLE_LANGUAGE "subtitle-stt-language"
 #define SUBTITLE_TRANSLATE "subtitle-translate"
 #define SUBTITLE_THREADS "subtitle-threads"
@@ -104,35 +104,115 @@ static const char *const language_labels[] = {
     N_("Turkish"), N_("Ukrainian"), N_("Dutch"), N_("Polish"),
 };
 
-static const char *const runtime_values[] = {
+static const char *const engine_values[] = {
     "whisper",
+    "voxtral",
+    "parakeet",
+    "moonshine",
 };
 
-static const char *const runtime_labels[] = {
+static const char *const engine_labels[] = {
     N_("whisper.cpp"),
+    N_("Voxtral"),
+    N_("Parakeet"),
+    N_("Moonshine"),
+};
+
+static const char *const model_values[] = {
+    "tiny.en",
+    "tiny",
+    "base.en",
+    "base",
+    "small.en",
+    "small",
+    "medium.en",
+    "medium",
+    "large-v1",
+    "large-v2",
+    "large-v3",
+    "large-v3-turbo",
+    "voxtral-mini-4b-realtime",
+    "parakeet-tdt_ctc-110m",
+    "parakeet-ctc-0.6b",
+    "parakeet-rnnt-0.6b",
+    "parakeet-tdt-0.6b-v2",
+    "parakeet-tdt-0.6b-v3",
+    "parakeet-ctc-1.1b",
+    "parakeet-rnnt-1.1b",
+    "parakeet-tdt-1.1b",
+    "parakeet-tdt_ctc-1.1b",
+    "parakeet_realtime_eou_120m-v1",
+    "nemotron-3.5-asr-streaming-0.6b",
+    "moonshine-tiny",
+    "moonshine-base",
+    "moonshine-tiny-streaming",
+    "moonshine-base-streaming",
+    "moonshine-small-streaming",
+    "moonshine-medium-streaming",
+};
+
+static const char *const model_labels[] = {
+    N_("tiny.en"),
+    N_("tiny"),
+    N_("base.en"),
+    N_("base"),
+    N_("small.en"),
+    N_("small"),
+    N_("medium.en"),
+    N_("medium"),
+    N_("large-v1"),
+    N_("large-v2"),
+    N_("large-v3"),
+    N_("large-v3-turbo"),
+    N_("Voxtral Mini 4B Realtime"),
+    N_("Parakeet TDT-CTC 110M"),
+    N_("Parakeet CTC 0.6B"),
+    N_("Parakeet RNN-T 0.6B"),
+    N_("Parakeet TDT 0.6B v2"),
+    N_("Parakeet TDT 0.6B v3 Multilingual"),
+    N_("Parakeet CTC 1.1B"),
+    N_("Parakeet RNN-T 1.1B"),
+    N_("Parakeet TDT 1.1B"),
+    N_("Parakeet TDT-CTC 1.1B"),
+    N_("Parakeet Realtime EOU 120M"),
+    N_("Nemotron 3.5 ASR Streaming 0.6B"),
+    N_("Moonshine Tiny"),
+    N_("Moonshine Base"),
+    N_("Moonshine Tiny Streaming"),
+    N_("Moonshine Base Streaming"),
+    N_("Moonshine Small Streaming"),
+    N_("Moonshine Medium Streaming"),
 };
 
 vlc_module_begin()
     set_text_domain(DOMAIN)
     set_shortname(N_(SUBTITLE_SHORTNAME))
-    set_description(N_("Offline speech-to-text subtitles with whisper.cpp"))
+    set_description(N_("Offline speech-to-text subtitles"))
     set_capability("interface", 0)
     set_category(CAT_INTERFACE)
     set_subcategory(SUBCAT_INTERFACE_CONTROL)
 
     set_section(N_("Settings · Model"), NULL)
-    add_string(SUBTITLE_BACKEND, "whisper",
-               N_("STT runtime"),
-               N_("Speech-to-text inference backend."), false)
-        change_string_list(runtime_values, runtime_labels)
-    add_loadfile(SUBTITLE_MODEL, "",
-                 N_("STT model file"),
-                 N_("Local model for the selected runtime. whisper.cpp uses "
-                    "GGML/GGUF models such as ggml-base.bin."),
+    add_string(SUBTITLE_ENGINE, "whisper",
+               N_("Engine"),
+               N_("Speech-to-text inference engine."), false)
+        change_string_list(engine_values, engine_labels)
+    add_string(SUBTITLE_MODEL_ID, "tiny.en",
+               N_("Model"),
+               N_("Model exposed by the selected speech-to-text engine."),
+               false)
+        change_string_list(model_values, model_labels)
+    add_loadfile(SUBTITLE_MODEL_FILE, "",
+                 N_("Model file"),
+                 N_("Whisper uses a local GGML/GGUF file. Voxtral uses "
+                    "consolidated.safetensors from its model directory. "
+                    "Parakeet uses a local GGUF file. Moonshine uses a model "
+                    "directory; select tokenizer.bin inside it."),
                  false)
     add_integer_with_range(SUBTITLE_THREADS, 4, 1, 32,
                            N_("Inference threads"),
-                           N_("CPU threads used by whisper.cpp."), false)
+                           N_("CPU threads requested from the selected "
+                              "runtime."), false)
     add_integer_with_range(SUBTITLE_CHUNK_MS, 5000, 1000, 30000,
                            N_("Transcription chunk length (ms)"),
                            N_("Audio accumulated before each STT inference. "
@@ -218,7 +298,7 @@ vlc_module_begin()
 
     add_submodule()
         set_shortname(N_("Subtitle runtime capture"))
-        set_description(N_("PCM capture for offline STT runtimes"))
+        set_description(N_("PCM capture for offline STT engines"))
         set_subcategory(SUBCAT_AUDIO_AFILTER)
         set_capability("audio filter", 0)
         add_shortcut(SUBTITLE_FILTER_NAME)
@@ -424,7 +504,7 @@ static void RuntimeStatus(void *opaque, const char *state,
     var_SetString(filter->obj.libvlc, SUBTITLE_RUNTIME_STATE, state);
     var_SetString(filter->obj.libvlc, SUBTITLE_RUNTIME_STATUS, message);
     config_PutPsz(filter, SUBTITLE_STATUS_DISPLAY, message);
-    msg_Info(filter, "STT runtime [%s]: %s", state, message);
+    msg_Info(filter, "STT engine [%s]: %s", state, message);
 }
 
 static block_t *ProcessRuntimeAudio(filter_t *filter, block_t *block)
@@ -437,7 +517,7 @@ static block_t *ProcessRuntimeAudio(filter_t *filter, block_t *block)
                                block->i_nb_samples, sys->channels,
                                sys->sample_rate, pts) && !sys->warned_backlog)
     {
-        msg_Warn(filter, "STT runtime is not accepting audio; dropping audio");
+        msg_Warn(filter, "STT engine is not accepting audio; dropping audio");
         sys->warned_backlog = true;
     }
     return block;
@@ -461,23 +541,41 @@ static void CloseRuntimeFilter(vlc_object_t *object)
 static int OpenRuntimeFilter(vlc_object_t *object)
 {
     filter_t *filter = (filter_t *)object;
-    char *model = var_InheritString(filter, SUBTITLE_MODEL);
+    char *backend = var_InheritString(filter, SUBTITLE_ENGINE);
+    char *model_id = var_InheritString(filter, SUBTITLE_MODEL_ID);
+    char *model = var_InheritString(filter, SUBTITLE_MODEL_FILE);
+    const bool use_voxtral = backend != NULL &&
+                             strcmp(backend, "voxtral") == 0;
+    const bool use_parakeet = backend != NULL &&
+                              strcmp(backend, "parakeet") == 0;
+    const bool use_moonshine = backend != NULL &&
+                               strcmp(backend, "moonshine") == 0;
+    const char *effective_model = is_empty_string(model_id)
+                                ? "tiny.en" : model_id;
     if (is_empty_string(model))
     {
+        const char *message = use_voxtral
+            ? "Select the Voxtral consolidated.safetensors file"
+            : use_parakeet
+                ? "Select a Parakeet GGUF model file"
+                : use_moonshine
+                    ? "Select tokenizer.bin from a Moonshine model directory"
+                    : "Set a local Whisper model file in preferences";
+        RuntimeStatus(filter, "error", message);
         free(model);
-        RuntimeStatus(filter, "error",
-                      "Set a local STT model file in preferences");
+        free(model_id);
+        free(backend);
         return VLC_EGENERIC;
     }
 
     char *language = var_InheritString(filter, SUBTITLE_LANGUAGE);
-    char *backend = var_InheritString(filter, SUBTITLE_BACKEND);
     filter_sys_t *sys = calloc(1, sizeof(*sys));
     if (sys == NULL)
     {
         free(backend);
         free(language);
         free(model);
+        free(model_id);
         return VLC_ENOMEM;
     }
 
@@ -492,6 +590,7 @@ static int OpenRuntimeFilter(vlc_object_t *object)
 
     const subtitle_runtime_config_t config = {
         .backend = is_empty_string(backend) ? "whisper" : backend,
+        .model_id = effective_model,
         .model_path = model,
         .language = is_empty_string(language) ? "auto" : language,
         .threads = (int)var_InheritInteger(filter, SUBTITLE_THREADS),
@@ -504,6 +603,7 @@ static int OpenRuntimeFilter(vlc_object_t *object)
     free(backend);
     free(language);
     free(model);
+    free(model_id);
     if (sys->runtime == NULL)
     {
         free(sys);
