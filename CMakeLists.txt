@@ -100,6 +100,9 @@ add_subdirectory("${WHISPER_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/whisper"
 
 set(VLC_SUBTITLE_SOURCES
     src/subtitle.c
+    src/osd.c
+    src/srt.c
+    src/filter.c
     runtime/audio_converter.cpp
     runtime/runtime.cpp
     runtime/whisper_runtime.cpp
@@ -435,6 +438,34 @@ target_include_directories(suboffline_plugin PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${CMAKE_CURRENT_SOURCE_DIR}/runtime"
 )
+
+if(NOT MSVC)
+    target_compile_options(suboffline_plugin PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+        -Wshadow
+        -Wstrict-overflow
+        -fno-strict-aliasing
+        -Wno-missing-field-initializers
+    )
+endif()
+
+option(VLC_SUBTITLE_NATIVE_ARCH "Compile with -march=native for host machine" OFF)
+if(VLC_SUBTITLE_NATIVE_ARCH AND NOT MSVC)
+    target_compile_options(suboffline_plugin PRIVATE -march=native)
+endif()
+
+option(VLC_SUBTITLE_ENABLE_LTO "Enable Link-Time Optimization (LTO)" OFF)
+if(VLC_SUBTITLE_ENABLE_LTO)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT ipo_supported OUTPUT ipo_error)
+    if(ipo_supported)
+        set_property(TARGET suboffline_plugin PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+    else()
+        message(WARNING "IPO/LTO is not supported: ${ipo_error}")
+    endif()
+endif()
 
 target_link_libraries(suboffline_plugin PRIVATE
     VLC::Plugin

@@ -30,27 +30,22 @@ constexpr int64_t kDiscontinuityUs = 500000;
 constexpr int64_t kMinimumCueUs = 100000;
 constexpr size_t kMaximumBacklogSeconds = 60;
 
-std::string trim_text(const char *value)
-{
+std::string trim_text(const char *value) {
     if (value == nullptr)
         return {};
 
     std::string text(value);
     const auto first = std::find_if_not(text.begin(), text.end(),
-                                        [](unsigned char ch) {
-                                            return std::isspace(ch) != 0;
-                                        });
-    const auto last = std::find_if_not(text.rbegin(), text.rend(),
-                                       [](unsigned char ch) {
-                                           return std::isspace(ch) != 0;
-                                       }).base();
+                                        [](unsigned char ch) { return std::isspace(ch) != 0; });
+    const auto last = std::find_if_not(text.rbegin(), text.rend(), [](unsigned char ch) {
+                          return std::isspace(ch) != 0;
+                      }).base();
     if (first >= last)
         return {};
     return std::string(first, last);
 }
 
-bool is_supported_model(const char *model)
-{
+bool is_supported_model(const char *model) {
     static const char *const models[] = {
         "parakeet-tdt_ctc-110m",
         "parakeet-ctc-0.6b",
@@ -72,38 +67,31 @@ bool is_supported_model(const char *model)
     return false;
 }
 
-bool is_gguf_file(const std::string &path)
-{
+bool is_gguf_file(const std::string &path) {
     std::error_code error;
     if (!std::filesystem::is_regular_file(path, error))
         return false;
 
     std::string extension = std::filesystem::path(path).extension().string();
     std::transform(extension.begin(), extension.end(), extension.begin(),
-                   [](unsigned char ch) {
-                       return static_cast<char>(std::tolower(ch));
-                   });
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
     return extension == ".gguf";
 }
 
-class DeviceOverride
-{
-public:
-    explicit DeviceOverride(bool force_cpu) : active(force_cpu)
-    {
+class DeviceOverride {
+  public:
+    explicit DeviceOverride(bool force_cpu) : active(force_cpu) {
         if (!active)
             return;
         const char *current = std::getenv("PARAKEET_DEVICE");
-        if (current != nullptr)
-        {
+        if (current != nullptr) {
             had_value = true;
             previous = current;
         }
         set("cpu");
     }
 
-    ~DeviceOverride()
-    {
+    ~DeviceOverride() {
         if (!active)
             return;
         if (had_value)
@@ -112,9 +100,8 @@ public:
             unset();
     }
 
-private:
-    static void set(const char *value)
-    {
+  private:
+    static void set(const char *value) {
 #ifdef _WIN32
         _putenv_s("PARAKEET_DEVICE", value);
 #else
@@ -122,8 +109,7 @@ private:
 #endif
     }
 
-    static void unset()
-    {
+    static void unset() {
 #ifdef _WIN32
         _putenv_s("PARAKEET_DEVICE", "");
 #else
@@ -138,9 +124,8 @@ private:
 
 } // namespace
 
-class ParakeetBackend final : public RuntimeBackend
-{
-public:
+class ParakeetBackend final : public RuntimeBackend {
+  public:
     std::string model_path;
     std::string language;
     int threads = 1;
@@ -161,8 +146,7 @@ public:
     bool flush_requested = false;
     std::thread worker;
 
-    ~ParakeetBackend() override
-    {
+    ~ParakeetBackend() override {
         {
             std::lock_guard<std::mutex> guard(mutex);
             stopping = true;
@@ -175,20 +159,17 @@ public:
             worker.join();
     }
 
-    bool push(const float *interleaved, size_t frames, unsigned channels,
-              unsigned sample_rate, int64_t pts_us) override
-    {
+    bool push(const float *interleaved, size_t frames, uint32_t channels, uint32_t sample_rate,
+              int64_t pts_us) override {
         std::lock_guard<std::mutex> guard(mutex);
         if (stopping || !accepting)
             return false;
 
         RuntimeAudioPacket packet;
-        packet.samples = converter.convert(interleaved, frames, channels,
-                                           sample_rate);
+        packet.samples = converter.convert(interleaved, frames, channels, sample_rate);
         packet.pts_us = pts_us;
         if (packet.samples.empty() ||
-            queued_samples + packet.samples.size() >
-                kMaximumBacklogSeconds * kRuntimeSampleRate)
+            queued_samples + packet.samples.size() > kMaximumBacklogSeconds * kRuntimeSampleRate)
             return false;
 
         queued_samples += packet.samples.size();
@@ -197,8 +178,7 @@ public:
         return true;
     }
 
-    void flush() override
-    {
+    void flush() override {
         {
             std::lock_guard<std::mutex> guard(mutex);
             queue.clear();
@@ -209,21 +189,16 @@ public:
         condition.notify_one();
     }
 
-    void status(const char *state, const char *message) const
-    {
+    void status(const char *state, const char *message) const {
         if (status_cb != nullptr)
             status_cb(opaque, state, message);
     }
 
-    bool transcribe(parakeet_ctx *context, const std::vector<float> &audio,
-                    int64_t start_us)
-    {
+    bool transcribe(parakeet_ctx *context, const std::vector<float> &audio, int64_t start_us) {
         char *raw = parakeet_capi_transcribe_pcm_lang(
-            context, audio.data(), static_cast<int>(audio.size()),
-            kRuntimeSampleRate, 0,
+            context, audio.data(), static_cast<int>(audio.size()), kRuntimeSampleRate, 0,
             language.empty() ? nullptr : language.c_str());
-        if (raw == nullptr)
-        {
+        if (raw == nullptr) {
             std::string message = "Parakeet inference failed";
             const char *detail = parakeet_capi_last_error(context);
             if (detail != nullptr && detail[0] != '\0')
@@ -237,8 +212,8 @@ public:
         if (text.empty())
             return true;
 
-        int64_t end_us = start_us +
-            static_cast<int64_t>(audio.size()) * 1000000 / kRuntimeSampleRate;
+        int64_t end_us =
+            start_us + static_cast<int64_t>(audio.size()) * 1000000 / kRuntimeSampleRate;
         if (end_us <= start_us)
             end_us = start_us + kMinimumCueUs;
         if (result_cb != nullptr)
@@ -246,10 +221,8 @@ public:
         return true;
     }
 
-    void run()
-    {
-        if (!is_gguf_file(model_path))
-        {
+    void run() {
+        if (!is_gguf_file(model_path)) {
             {
                 std::lock_guard<std::mutex> guard(mutex);
                 accepting = false;
@@ -267,8 +240,7 @@ public:
             DeviceOverride device(!use_gpu);
             context = parakeet_capi_load(model_path.c_str());
         }
-        if (context == nullptr)
-        {
+        if (context == nullptr) {
             pk::shutdown_backend();
             {
                 std::lock_guard<std::mutex> guard(mutex);
@@ -288,34 +260,28 @@ public:
         int64_t expected_next_us = kRuntimeNoPts;
         bool failed = false;
 
-        for (;;)
-        {
+        for (;;) {
             RuntimeAudioPacket packet;
             bool should_reset = false;
             {
                 std::unique_lock<std::mutex> guard(mutex);
-                condition.wait(guard, [this] {
-                    return stopping || flush_requested || !queue.empty();
-                });
+                condition.wait(guard,
+                               [this] { return stopping || flush_requested || !queue.empty(); });
                 if (stopping)
                     break;
-                if (flush_requested)
-                {
+                if (flush_requested) {
                     flush_requested = false;
                     queue.clear();
                     queued_samples = 0;
                     should_reset = true;
-                }
-                else
-                {
+                } else {
                     packet = std::move(queue.front());
                     queue.pop_front();
                     queued_samples -= packet.samples.size();
                 }
             }
 
-            if (should_reset)
-            {
+            if (should_reset) {
                 pending.clear();
                 pending_start_us = kRuntimeNoPts;
                 expected_next_us = kRuntimeNoPts;
@@ -324,41 +290,31 @@ public:
             if (packet.samples.empty())
                 continue;
 
-            if (packet.pts_us != kRuntimeNoPts &&
-                expected_next_us != kRuntimeNoPts &&
-                std::llabs(packet.pts_us - expected_next_us) >
-                    kDiscontinuityUs)
-            {
+            if (packet.pts_us != kRuntimeNoPts && expected_next_us != kRuntimeNoPts &&
+                std::llabs(packet.pts_us - expected_next_us) > kDiscontinuityUs) {
                 pending.clear();
                 pending_start_us = kRuntimeNoPts;
             }
 
             if (pending.empty())
                 pending_start_us = packet.pts_us;
-            pending.insert(pending.end(), packet.samples.begin(),
-                           packet.samples.end());
+            pending.insert(pending.end(), packet.samples.begin(), packet.samples.end());
             if (packet.pts_us != kRuntimeNoPts)
-                expected_next_us = packet.pts_us +
-                    static_cast<int64_t>(packet.samples.size()) * 1000000 /
-                        kRuntimeSampleRate;
+                expected_next_us = packet.pts_us + static_cast<int64_t>(packet.samples.size()) *
+                                                       1000000 / kRuntimeSampleRate;
 
-            while (pending.size() >= chunk_samples)
-            {
-                std::vector<float> chunk(pending.begin(),
-                                         pending.begin() + chunk_samples);
+            while (pending.size() >= chunk_samples) {
+                std::vector<float> chunk(pending.begin(), pending.begin() + chunk_samples);
                 const int64_t chunk_start =
                     pending_start_us == kRuntimeNoPts ? 0 : pending_start_us;
-                if (!transcribe(context, chunk, chunk_start))
-                {
+                if (!transcribe(context, chunk, chunk_start)) {
                     failed = true;
                     break;
                 }
-                pending.erase(pending.begin(),
-                              pending.begin() + chunk_samples);
+                pending.erase(pending.begin(), pending.begin() + chunk_samples);
                 if (pending_start_us != kRuntimeNoPts)
                     pending_start_us +=
-                        static_cast<int64_t>(chunk_samples) * 1000000 /
-                            kRuntimeSampleRate;
+                        static_cast<int64_t>(chunk_samples) * 1000000 / kRuntimeSampleRate;
             }
             if (failed)
                 break;
@@ -375,14 +331,11 @@ public:
     }
 };
 
-std::unique_ptr<RuntimeBackend> create_parakeet_backend(
-    const subtitle_runtime_config_t &config,
-    subtitle_runtime_result_cb result_cb,
-    subtitle_runtime_status_cb status_cb,
-    void *opaque)
-{
-    if (!is_supported_model(config.model_id))
-    {
+std::unique_ptr<RuntimeBackend> create_parakeet_backend(const subtitle_runtime_config_t &config,
+                                                        subtitle_runtime_result_cb result_cb,
+                                                        subtitle_runtime_status_cb status_cb,
+                                                        void *opaque) {
+    if (!is_supported_model(config.model_id)) {
         if (status_cb != nullptr)
             status_cb(opaque, "error", "Select a supported Parakeet model");
         return nullptr;
@@ -393,22 +346,18 @@ std::unique_ptr<RuntimeBackend> create_parakeet_backend(
     auto runtime = std::make_unique<ParakeetBackend>();
     runtime->model_path = config.model_path;
     runtime->language = config.language != nullptr ? config.language : "auto";
-    runtime->threads = std::max(1, config.threads);
-    const int chunk_ms = std::clamp(config.chunk_ms, 1000, 30000);
-    runtime->chunk_samples =
-        static_cast<size_t>(chunk_ms) * kRuntimeSampleRate / 1000;
+    runtime->threads = std::max<uint32_t>(1, config.threads);
+    const uint32_t chunk_ms = std::clamp<uint32_t>(config.chunk_ms, 1000, 30000);
+    runtime->chunk_samples = static_cast<size_t>(chunk_ms) * kRuntimeSampleRate / 1000;
     runtime->use_gpu = config.use_gpu;
     runtime->result_cb = result_cb;
     runtime->status_cb = status_cb;
     runtime->opaque = opaque;
 
-    try
-    {
+    try {
         ParakeetBackend *instance = runtime.get();
         runtime->worker = std::thread([instance] { instance->run(); });
-    }
-    catch (...)
-    {
+    } catch (...) {
         return nullptr;
     }
     return runtime;
