@@ -34,9 +34,8 @@ if(WIN32)
         set(VLC_AUTO_SDK_DIR "${CMAKE_BINARY_DIR}/vlc-sdk")
         
         # Check if already provisioned in build directory
-        file(GLOB_RECURSE EXISTING_SDK_INC LIST_DIRECTORIES true
-             "${VLC_AUTO_SDK_DIR}/*/include/vlc/plugins/vlc_plugin.h"
-             "${VLC_AUTO_SDK_DIR}/include/vlc/plugins/vlc_plugin.h")
+        file(GLOB_RECURSE EXISTING_SDK_INC LIST_DIRECTORIES false
+             "${VLC_AUTO_SDK_DIR}/*vlc_plugin.h")
 
         if(EXISTING_SDK_INC)
             list(GET EXISTING_SDK_INC 0 EXISTING_INC_FILE)
@@ -92,9 +91,8 @@ if(WIN32)
                 message(FATAL_ERROR "Failed to extract VLC SDK archive: ${VLC_ARCHIVE_PATH}")
             endif()
 
-            file(GLOB_RECURSE FOUND_SDK_INC LIST_DIRECTORIES true
-                 "${VLC_AUTO_SDK_DIR}/*/include/vlc/plugins/vlc_plugin.h"
-                 "${VLC_AUTO_SDK_DIR}/include/vlc/plugins/vlc_plugin.h")
+            file(GLOB_RECURSE FOUND_SDK_INC LIST_DIRECTORIES false
+                 "${VLC_AUTO_SDK_DIR}/*vlc_plugin.h")
 
             if(FOUND_SDK_INC)
                 list(GET FOUND_SDK_INC 0 FOUND_INC_FILE)
@@ -112,22 +110,22 @@ if(WIN32)
 
     find_path(VLC_INCLUDE_DIR
         NAMES vlc/vlc.h
-        PATHS "${VLC_SDK_DIR}/include"
+        PATHS "${VLC_SDK_DIR}/include" "${VLC_SDK_DIR}/sdk/include"
         NO_DEFAULT_PATH
     )
     find_path(VLC_PLUGINS_INCLUDE_DIR
         NAMES vlc_plugin.h
-        PATHS "${VLC_SDK_DIR}/include/vlc/plugins"
+        PATHS "${VLC_SDK_DIR}/include/vlc/plugins" "${VLC_SDK_DIR}/sdk/include/vlc/plugins"
         NO_DEFAULT_PATH
     )
     find_library(VLCCORE_LIBRARY
         NAMES libvlccore vlccore
-        PATHS "${VLC_SDK_DIR}/lib"
+        PATHS "${VLC_SDK_DIR}/lib" "${VLC_SDK_DIR}/sdk/lib"
         NO_DEFAULT_PATH
     )
     find_library(VLC_LIBRARY
         NAMES libvlc vlc
-        PATHS "${VLC_SDK_DIR}/lib"
+        PATHS "${VLC_SDK_DIR}/lib" "${VLC_SDK_DIR}/sdk/lib"
         NO_DEFAULT_PATH
     )
 
