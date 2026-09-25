@@ -136,9 +136,17 @@ jobs:
         run: |
           VERSION="${{ needs.get-version.outputs.version }}"
           mkdir -p dist
-          cd build/plugin
+          DLL_PATH=$(find build/plugin -name "libsuboffline_plugin.dll" | head -n 1)
+          if [[ -z "${DLL_PATH}" ]]; then
+            echo "Error: libsuboffline_plugin.dll not found in build/plugin"
+            exit 1
+          fi
+          DLL_DIR=$(dirname "${DLL_PATH}")
+          echo "Packaging Windows DLLs from ${DLL_DIR}:"
+          ls -la "${DLL_DIR}"/*.dll
           PKG_NAME="libsuboffline-${VERSION}-x86_64-windows.zip"
-          7z a "../../dist/${PKG_NAME}" *.dll
+          (cd "${DLL_DIR}" && 7z a "${GITHUB_WORKSPACE}/dist/${PKG_NAME}" *.dll)
+          7z l "dist/${PKG_NAME}"
 
       - name: Upload Windows package
         uses: actions/upload-artifact@v4

@@ -92,8 +92,8 @@ jobs:
 
       - name: Verify build artifacts
         run: |
-          ls -la build/plugin/
-          test -f build/plugin/libsuboffline_plugin.dll
+          find build/plugin -name "*.dll"
+          test -n "$(find build/plugin -name 'libsuboffline_plugin.dll')"
 
       - name: Upload plugin artifacts
         uses: actions/upload-artifact@v4
