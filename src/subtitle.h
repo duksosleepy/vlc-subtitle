@@ -36,6 +36,21 @@
 #include <vlc_vout_osd.h>
 // clang-format on
 
+// VLC 3.0 compatibility polyfills
+#ifndef VLC_TICK_INVALID
+# ifdef VLC_TS_INVALID
+#  define VLC_TICK_INVALID VLC_TS_INVALID
+# else
+#  define VLC_TICK_INVALID 0
+# endif
+#endif
+
+#ifndef VLC_TICK_FROM_SEC
+typedef mtime_t vlc_tick_t;
+# define VLC_TICK_FROM_SEC(sec) ((vlc_tick_t)((sec) * CLOCK_FREQ))
+# define VLC_TICK_FROM_MS(ms)   ((vlc_tick_t)((ms) * 1000))
+#endif
+
 #define SUBTITLE_ENABLE "subtitle-enable"
 #define SUBTITLE_POS_X "subtitle-position-x"
 #define SUBTITLE_POS_Y "subtitle-position-y"
