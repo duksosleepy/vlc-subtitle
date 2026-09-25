@@ -18,6 +18,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _MSC_VER
+# include <BaseTsd.h>
+typedef SSIZE_T ssize_t;
+# define strncasecmp _strnicmp
+# define strcasecmp  _stricmp
+# pragma warning(disable: 4996)
+#endif
+
 // clang-format off
 #include <vlc_common.h>
 #include <vlc_plugin.h>
