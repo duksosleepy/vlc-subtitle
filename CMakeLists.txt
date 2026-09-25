@@ -348,7 +348,7 @@ if(VLC_SUBTITLE_MOONSHINE)
             "-DCMAKE_ARCHIVE_OUTPUT_DIRECTORY_DEBUG=${MOONSHINE_BINARY_DIR}"
         )
     else()
-        string(APPEND MOONSHINE_CXX_FLAGS " -Wno-error=unused-parameter")
+        string(APPEND MOONSHINE_CXX_FLAGS " -Wno-error -Wno-unused-result -Wno-unused-parameter")
     endif()
     if(CMAKE_TOOLCHAIN_FILE)
         list(APPEND MOONSHINE_PLATFORM_ARGS
@@ -376,6 +376,7 @@ if(VLC_SUBTITLE_MOONSHINE)
             "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
             "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}"
             "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+            "-DCMAKE_C_FLAGS:STRING=${MOONSHINE_CXX_FLAGS}"
             "-DCMAKE_CXX_FLAGS:STRING=${MOONSHINE_CXX_FLAGS}"
             ${MOONSHINE_PLATFORM_ARGS}
             "-DCMAKE_POSITION_INDEPENDENT_CODE=ON"

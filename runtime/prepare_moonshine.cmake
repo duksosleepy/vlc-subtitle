@@ -30,6 +30,8 @@ if(TTS_SUBDIRECTORY_SECTION LESS 0)
 endif()
 string(REPLACE "${TTS_SUBDIRECTORY_BLOCK}" ""
        CORE_CMAKE_SOURCE "${CORE_CMAKE_SOURCE}")
+string(REPLACE "-Werror" "-Wno-error"
+       CORE_CMAKE_SOURCE "${CORE_CMAKE_SOURCE}")
 file(WRITE "${CORE_CMAKE_PATH}" "${CORE_CMAKE_SOURCE}")
 
 set(C_API_PATH "${DEST_DIR}/core/moonshine-c-api.cpp")
