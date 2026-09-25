@@ -16,20 +16,12 @@ defaults:
 
 jobs:
   build:
-    name: Windows ${{ matrix.arch }} (${{ matrix.build_type }})
+    name: Windows x64 (${{ matrix.build_type }})
     runs-on: windows-2022
     strategy:
       fail-fast: false
       matrix:
-        arch: [ x64, x86 ]
         build_type: [ Release, Debug ]
-        include:
-          - arch: x64
-            vs_arch: x64
-            triplet: x64-windows
-          - arch: x86
-            vs_arch: Win32
-            triplet: x86-windows
 
     env:
       SCCACHE_DIR: C:/Users/runneradmin/AppData/Local/Mozilla/sccache
@@ -43,7 +35,7 @@ jobs:
           fetch-depth: 0
 
       - name: Import Visual Studio env vars
-        run: py -3 .github/workflows/ci-windows.py import_vs_env ${{ matrix.arch }}
+        run: py -3 .github/workflows/ci-windows.py import_vs_env x64
 
       - name: Install sccache
         run: |
@@ -63,9 +55,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:/Users/runneradmin/AppData/Local/Mozilla/sccache
-          key: sccache-windows-${{ matrix.arch }}-${{ matrix.build_type }}-${{ github.sha }}
+          key: sccache-windows-x64-${{ matrix.build_type }}-${{ github.sha }}
           restore-keys: |
-            sccache-windows-${{ matrix.arch }}-${{ matrix.build_type }}-
+            sccache-windows-x64-${{ matrix.build_type }}-
 
       - name: Restore vcpkg cache
         uses: actions/cache@v4
@@ -74,9 +66,9 @@ jobs:
             ${{ env.VCPKG_INSTALLATION_ROOT }}/installed
             ~/.cache/vcpkg/archives
             ~/AppData/Local/vcpkg/archives
-          key: vcpkg-windows-${{ matrix.triplet }}-${{ hashFiles('vcpkg.json') }}
+          key: vcpkg-windows-x64-windows-${{ hashFiles('vcpkg.json') }}
           restore-keys: |
-            vcpkg-windows-${{ matrix.triplet }}-
+            vcpkg-windows-x64-windows-
 
       - name: Zero sccache statistics
         run: sccache --zero-stats || true
@@ -85,10 +77,10 @@ jobs:
         run: |
           cmake -S . -B build \
             -G "Visual Studio 17 2022" \
-            -A "${{ matrix.vs_arch }}" \
+            -A "x64" \
             -DCMAKE_BUILD_TYPE="${{ matrix.build_type }}" \
             -DCMAKE_TOOLCHAIN_FILE="${VCPKG_INSTALLATION_ROOT}/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_TARGET_TRIPLET="${{ matrix.triplet }}" \
+            -DVCPKG_TARGET_TRIPLET="x64-windows" \
             -DVLC_SUBTITLE_ENABLE_SCCACHE=ON
 
       - name: Build plugin
@@ -106,6 +98,6 @@ jobs:
       - name: Upload plugin artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: vlc-subtitle-windows-${{ matrix.arch }}-${{ matrix.build_type }}
+          name: vlc-subtitle-windows-x64-${{ matrix.build_type }}
           path: build/plugin/
           if-no-files-found: error

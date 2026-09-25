@@ -72,20 +72,9 @@ jobs:
           echo "Determined Version: ${VERSION}, Tag: ${TAG_NAME}, Pre-release: ${PRERELEASE}"
 
   build-windows:
-    name: Windows ${{ matrix.arch }}
+    name: Windows x64
     needs: [ get-version ]
     runs-on: windows-2022
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [ x64, x86 ]
-        include:
-          - arch: x64
-            vs_arch: x64
-            triplet: x64-windows
-          - arch: x86
-            vs_arch: Win32
-            triplet: x86-windows
 
     env:
       SCCACHE_DIR: C:/Users/runneradmin/AppData/Local/Mozilla/sccache
@@ -99,7 +88,7 @@ jobs:
           fetch-depth: 0
 
       - name: Import Visual Studio env vars
-        run: py -3 .github/workflows/ci-windows.py import_vs_env ${{ matrix.arch }}
+        run: py -3 .github/workflows/ci-windows.py import_vs_env x64
 
       - name: Install sccache
         run: |
@@ -114,9 +103,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:/Users/runneradmin/AppData/Local/Mozilla/sccache
-          key: sccache-windows-release-${{ matrix.arch }}-${{ github.sha }}
+          key: sccache-windows-release-x64-${{ github.sha }}
           restore-keys: |
-            sccache-windows-release-${{ matrix.arch }}-
+            sccache-windows-release-x64-
 
       - name: Restore vcpkg cache
         uses: actions/cache@v4
@@ -125,18 +114,18 @@ jobs:
             ${{ env.VCPKG_INSTALLATION_ROOT }}/installed
             ~/.cache/vcpkg/archives
             ~/AppData/Local/vcpkg/archives
-          key: vcpkg-windows-${{ matrix.triplet }}-${{ hashFiles('vcpkg.json') }}
+          key: vcpkg-windows-x64-windows-${{ hashFiles('vcpkg.json') }}
           restore-keys: |
-            vcpkg-windows-${{ matrix.triplet }}-
+            vcpkg-windows-x64-windows-
 
       - name: Configure CMake
         run: |
           cmake -S . -B build \
             -G "Visual Studio 17 2022" \
-            -A "${{ matrix.vs_arch }}" \
+            -A "x64" \
             -DCMAKE_BUILD_TYPE="Release" \
             -DCMAKE_TOOLCHAIN_FILE="${VCPKG_INSTALLATION_ROOT}/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_TARGET_TRIPLET="${{ matrix.triplet }}" \
+            -DVCPKG_TARGET_TRIPLET="x64-windows" \
             -DVLC_SUBTITLE_ENABLE_SCCACHE=ON
 
       - name: Build plugin
@@ -148,18 +137,13 @@ jobs:
           VERSION="${{ needs.get-version.outputs.version }}"
           mkdir -p dist
           cd build/plugin
-          if [[ "${{ matrix.arch }}" == "x64" ]]; then
-            ARCH_NAME="x86_64"
-          else
-            ARCH_NAME="x86"
-          fi
-          PKG_NAME="libsuboffline-${VERSION}-${ARCH_NAME}-windows.zip"
+          PKG_NAME="libsuboffline-${VERSION}-x86_64-windows.zip"
           7z a "../../dist/${PKG_NAME}" *.dll
 
       - name: Upload Windows package
         uses: actions/upload-artifact@v4
         with:
-          name: package-windows-${{ matrix.arch }}
+          name: package-windows-x64
           path: dist/*.zip
           if-no-files-found: error
 
@@ -302,8 +286,9 @@ jobs:
           cd build/plugin
           PKG_NAME="libsuboffline-${VERSION}-aarch64-apple-darwin.tar.gz"
           tar -chzf "../../dist/${PKG_NAME}" *.*
-          # Also create an arm64-apple-darwin alias for convenience
+          # Also create arm64-apple-darwin and x86_64-apple-darwin aliases for compatibility
           cp "../../dist/${PKG_NAME}" "../../dist/libsuboffline-${VERSION}-arm64-apple-darwin.tar.gz"
+          cp "../../dist/${PKG_NAME}" "../../dist/libsuboffline-${VERSION}-x86_64-apple-darwin.tar.gz"
 
       - name: Upload macOS package
         uses: actions/upload-artifact@v4
