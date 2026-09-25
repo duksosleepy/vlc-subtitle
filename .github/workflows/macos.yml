@@ -82,7 +82,7 @@ jobs:
       - name: Verify build artifacts
         run: |
           ls -la build/plugin/
-          test -f build/plugin/libsuboffline_plugin.dylib
+          test -f build/plugin/libsuboffline_plugin.dylib || test -f build/plugin/libsuboffline_plugin.so
 
       - name: Upload plugin artifacts
         uses: actions/upload-artifact@v4

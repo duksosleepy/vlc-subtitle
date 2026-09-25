@@ -301,7 +301,7 @@ jobs:
           mkdir -p dist
           cd build/plugin
           PKG_NAME="libsuboffline-${VERSION}-aarch64-apple-darwin.tar.gz"
-          tar -chzf "../../dist/${PKG_NAME}" *.dylib
+          tar -chzf "../../dist/${PKG_NAME}" *.*
           # Also create an arm64-apple-darwin alias for convenience
           cp "../../dist/${PKG_NAME}" "../../dist/libsuboffline-${VERSION}-arm64-apple-darwin.tar.gz"
 

@@ -531,6 +531,9 @@ set_target_properties(suboffline_plugin PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugin"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugin"
 )
+if(APPLE)
+    set_property(TARGET suboffline_plugin PROPERTY SUFFIX ".dylib")
+endif()
 
 # --- 6. Installation ---
 if(VLC_PLUGINS_DIR)
