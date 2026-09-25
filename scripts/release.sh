@@ -40,7 +40,7 @@ shift $((OPTIND - 1))
 VERSION_ARG="${1:-}"
 
 # Check for uncommitted changes
-if ! git diff-index --quiet HEAD --; then
+if ! git diff-index --quiet --ignore-submodules HEAD --; then
     echo "Error: Working directory has uncommitted changes. Please commit or stash them first." 1>&2
     exit 1
 fi
