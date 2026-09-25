@@ -75,13 +75,11 @@ runtime/voxtral.c/download_model.sh --dir "$HOME/models/voxtral-realtime-4b"
 
 In VLC preferences, select:
 
-- `Engine`: `Voxtral`
 - `Model`: `Voxtral Mini 4B Realtime`
 - `Model file`: `consolidated.safetensors` from the directory that also
   contains `params.json` and `tekken.json`
 
-The Model dropdown contains the Whisper and Voxtral models together. Select a
-model that belongs to the chosen Engine.
+The backend engine is automatically selected based on the chosen Model.
 
 Voxtral detects supported languages itself. The Whisper language and
 translation settings do not apply to this backend. Voxtral emits text tokens
@@ -101,8 +99,7 @@ model and a practical starting point.
 
 In VLC preferences, select:
 
-- `Engine`: `Parakeet`
-- `Model`: the family matching the downloaded GGUF
+- `Model`: the Parakeet model matching the downloaded GGUF (e.g. `Parakeet TDT-CTC 110M`)
 - `Model file`: the local `.gguf` file
 
 Parakeet uses the configured chunk length to produce subtitle cues and honors
@@ -125,7 +122,7 @@ directory must contain:
 - Streaming: `frontend.ort`, `encoder.ort`, `adapter.ort`, `cross_kv.ort`,
   `decoder_kv.ort`, `streaming_config.json`, and `tokenizer.bin`.
 
-In VLC preferences, select `Moonshine`, choose the matching architecture, and
+In VLC preferences, select the matching architecture under `Model` (e.g. `Moonshine Tiny`), and
 set `Model file` to `tokenizer.bin` inside that directory. The backend uses
 Moonshine's streaming API and VAD timestamps for completed subtitle cues. The
 language is determined by the model files; the language and translation
@@ -137,12 +134,53 @@ TTS/G2P source and API, so no speech-synthesis models or libraries are bundled.
 The bundled desktop ONNX Runtime uses CPU inference. Moonshine currently
 ignores the inference-thread and GPU preferences.
 
+## Prerequisites & Text Renderer Support
+
+> [!IMPORTANT]
+> **VLC must have FreeType text rendering support installed.**
+> On modular Linux distributions (such as Arch Linux, CachyOS, Fedora, and Debian/Ubuntu), VLC's text and font rendering plugins are packaged separately from the base media player.
+> If FreeType is missing, VLC silently falls back to a dummy renderer (`libtdummy_plugin.so`), which drops all on-screen subtitle requests.
+>
+> - **Arch Linux / CachyOS**: `sudo pacman -S vlc-plugin-freetype`
+> - **Debian / Ubuntu**: `sudo apt install vlc-plugin-base`
+> - **Fedora**: `sudo dnf install vlc-plugins-base`
+
 ## Installation
 
-Copy the plugin file into VLC's `plugins/control` directory, then enable the
-control interface in VLC preferences.
+### User-Level Installation (Recommended, No Root/Sudo Required)
 
-Linux 64-bit:
+1. Copy the compiled plugin and runtime libraries to your user VLC plugins folder:
+
+```sh
+mkdir -p ~/.local/share/vlc/plugins/control
+cp libsuboffline_plugin.so libparakeet.so libmoonshine.so libonnxruntime.so.1 \
+   ~/.local/share/vlc/plugins/control/
+```
+
+2. Configure `VLC_PLUGIN_PATH`. By default on Linux, VLC only scans `/usr/lib/vlc/plugins`. To ensure VLC loads user plugins:
+
+- **Fish shell**:
+  ```fish
+  set -Ux VLC_PLUGIN_PATH "$HOME/.local/share/vlc/plugins"
+  ```
+- **Bash / Zsh**:
+  ```sh
+  echo 'export VLC_PLUGIN_PATH="$HOME/.local/share/vlc/plugins"' >> ~/.bashrc
+  ```
+- **GUI Launches / Desktop Environment (systemd user session)**:
+  ```sh
+  mkdir -p ~/.config/environment.d
+  echo "VLC_PLUGIN_PATH=$HOME/.local/share/vlc/plugins" >> ~/.config/environment.d/vlc.conf
+  ```
+
+3. Clear VLC's plugin cache:
+
+```sh
+rm -f ~/.local/lib/vlc/plugins/plugins.dat ~/.cache/vlc/*
+vlc --reset-plugins-cache --list
+```
+
+### System-Wide Installation (Requires Sudo)
 
 ```sh
 sudo install -m 0755 libsuboffline_plugin.so libparakeet.so \
@@ -151,7 +189,7 @@ sudo install -m 0755 libsuboffline_plugin.so libparakeet.so \
 vlc --no-plugins-cache
 ```
 
-Windows 64-bit:
+### Windows 64-bit Installation
 
 Copy `libsuboffline_plugin.dll`, `libparakeet.dll`, `libmoonshine.dll`, and
 `onnxruntime.dll` to:
@@ -162,18 +200,66 @@ C:\Program Files\VideoLAN\VLC\plugins\control\
 
 Then restart VLC.
 
-## Usage
+## VLC Configuration
 
-1. Enable `Subtitle Offline` in VLC control-interface preferences.
-2. Set `Subtitle output file` to the SRT file you want to create, or leave it
-   empty to write `vlc-subtitle.srt` in your Documents folder.
-3. Optionally set `Subtitle text source` to a UTF-8 text file with one subtitle
-   line per cue.
-4. Play a video, press `[` at the cue start, and press `]` at the cue end.
-5. Press `F8` if you need VLC to reload the generated subtitle file.
+1. **Enable the Control Interface**:
+   - In VLC, open `Tools` > `Preferences` (`Ctrl+P`).
+   - Select **All** under `Show settings` at the bottom left.
+   - Navigate to `Interface` > `Control interfaces`.
+   - Check the box for **Subtitle Offline** (`suboffline`).
+   - Click **Save** and restart VLC.
+2. **Verify On Screen Display (OSD)**:
+   - In `Preferences` (`Simple` or `All`) > `Subtitles / OSD`, ensure **Enable On Screen Display (OSD)** is checked.
 
-If no text source is configured, cues use the configured fallback text with a
-cue number.
+## CLI Usage & Quick Start
+
+You can launch VLC directly with your preferred speech-to-text engine from the command line:
+
+### 1. Whisper (Fast, default)
+```sh
+vlc <video_file_or_stream_url>
+```
+With custom model:
+```sh
+vlc <video_file_or_stream_url> \
+  --subtitle-engine=whisper \
+  --subtitle-model=tiny.en \
+  --subtitle-model-file=/path/to/ggml-tiny.en.bin
+```
+
+### 2. Voxtral Mini 4B Realtime
+```sh
+vlc <video_file_or_stream_url> \
+  --subtitle-engine=voxtral \
+  --subtitle-model=voxtral-mini-4b-realtime \
+  --subtitle-model-file="$HOME/models/voxtral-realtime-4b/consolidated.safetensors"
+```
+
+### 3. Parakeet
+```sh
+vlc <video_file_or_stream_url> \
+  --subtitle-engine=parakeet \
+  --subtitle-model-file=/path/to/tdt_ctc-110m-q4_k.gguf
+```
+
+### 4. Moonshine
+```sh
+vlc <video_file_or_stream_url> \
+  --subtitle-engine=moonshine \
+  --subtitle-model=moonshine-tiny \
+  --subtitle-model-file=/path/to/moonshine-tiny/tokenizer.bin
+```
+
+## Manual Cue Marking & Shortcuts
+
+1. Set `Subtitle output file` in preferences to the SRT file you want to create (defaults to `~/vlc-subtitle.srt` or your Documents folder).
+2. Optionally set `Subtitle text source` to a UTF-8 text file with one subtitle line per cue.
+3. Play a video or live stream:
+   - Press `[` at the cue start, and press `]` at the cue end.
+   - Press `\` to save a quick cue for the previous few seconds.
+   - Press `F8` to reload the attached subtitle file into VLC.
+
+If no text source is configured, cues use the recognized speech text or configured fallback text with a cue number.
 
 ## Runtime architecture
 

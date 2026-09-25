@@ -1,0 +1,103 @@
+name: Linux Builds
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: Linux x64 (${{ matrix.build_type }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [ Release, Debug ]
+
+    env:
+      SCCACHE_DIR: /home/runner/.cache/sccache
+      CMAKE_BUILD_PARALLEL_LEVEL: 4
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libvlc-dev \
+            libvlccore-dev \
+            libopenblas-dev \
+            pkg-config \
+            cmake \
+            gcc \
+            g++
+
+      - name: Install sccache
+        run: |
+          SCCACHE_VER="v0.9.1"
+          curl -fsSL "https://github.com/mozilla/sccache/releases/download/${SCCACHE_VER}/sccache-${SCCACHE_VER}-x86_64-unknown-linux-musl.tar.gz" | \
+            tar -zxf - --strip-components=1
+          sudo mv sccache /usr/local/bin/
+          sccache --version
+
+      - name: Restore sccache cache
+        uses: actions/cache@v4
+        with:
+          path: /home/runner/.cache/sccache
+          key: sccache-linux-${{ matrix.build_type }}-${{ github.sha }}
+          restore-keys: |
+            sccache-linux-${{ matrix.build_type }}-
+
+      - name: Restore vcpkg cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.VCPKG_INSTALLATION_ROOT }}/installed
+            ~/.cache/vcpkg/archives
+          key: vcpkg-linux-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-linux-
+
+      - name: Zero sccache statistics
+        run: sccache --zero-stats || true
+
+      - name: Configure CMake
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE="${{ matrix.build_type }}" \
+            -DCMAKE_TOOLCHAIN_FILE="${VCPKG_INSTALLATION_ROOT}/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET="x64-linux" \
+            -DVLC_SUBTITLE_ENABLE_SCCACHE=ON
+
+      - name: Build plugin
+        run: |
+          cmake --build build --target suboffline_plugin --parallel
+
+      - name: Show sccache statistics
+        run: sccache --show-stats
+
+      - name: Verify build artifacts
+        run: |
+          ls -la build/plugin/
+          test -f build/plugin/libsuboffline_plugin.so
+
+      - name: Upload plugin artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: vlc-subtitle-linux-x64-${{ matrix.build_type }}
+          path: build/plugin/
+          if-no-files-found: error

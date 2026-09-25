@@ -1,0 +1,12 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "vlc-subtitle",
+  "version-string": "0.1.0",
+  "description": "VLC subtitle offline speech-to-text plugin with Whisper, Parakeet, Moonshine and Voxtral runtimes",
+  "homepage": "https://github.com/duksosleepy/vlc-subtitle",
+  "license": "LGPL-2.1-or-later",
+  "dependencies": [
+    "freetype",
+    "libsrt"
+  ]
+}

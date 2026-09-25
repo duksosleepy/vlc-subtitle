@@ -1,92 +1,69 @@
 # Building vlc-subtitle
 
-`vlc-subtitle` builds only for Linux 64-bit and Windows 64-bit.
+`vlc-subtitle` builds for Linux, Windows, and macOS using CMake and vcpkg (or Homebrew on macOS).
 
-You need the libVLC plugin SDK headers/pkg-config files, CMake 3.22.1 or newer,
-and C/C++ compilers. whisper.cpp, voxtral.c, parakeet.cpp, and Moonshine are
-pinned as Git submodules under `runtime/`.
+The project bundles its speech-to-text engines under `runtime/` (`whisper.cpp`, `voxtral.c`, `parakeet.cpp`, and `moonshine`) as Git submodules. External package dependencies (`freetype`, `libsrt`) are managed via `vcpkg.json` manifest mode or system/Homebrew packages.
 
-Initialize dependencies after cloning:
+Initialize submodules after cloning:
 
 ```sh
 git submodule update --init --recursive
 ```
 
-## Linux 64-bit
+---
 
-On Debian/Ubuntu:
+## Windows (MSVC 2022)
 
-```sh
-sudo apt-get install libvlc-dev libvlccore-dev libopenblas-dev \
-  gcc g++ cmake make pkg-config
-make
-sudo make install
+The recommended toolchain for Windows is **Microsoft Visual Studio 2022 (MSVC)** with CMake and vcpkg.
+
+### Quick Start (PowerShell Script)
+
+A helper script `scripts/build.ps1` handles vcpkg setup, triplet selection, automated VLC SDK downloading, and compilation:
+
+```powershell
+# Build 64-bit Release (default: x64-windows triplet)
+.\scripts\build.ps1 cmake-release
+
+# Build 64-bit Debug
+.\scripts\build.ps1 cmake-debug
+
+# Build 64-bit Static runtime
+.\scripts\build.ps1 cmake-release-static
+
+# Build 32-bit (x86)
+.\scripts\build.ps1 cmake-release-x86
 ```
 
-On Arch Linux:
+### Manual CMake + vcpkg Build
 
-```sh
-sudo pacman -S vlc openblas cmake make pkgconf gcc
-make
-```
+1. **Install and Bootstrap vcpkg**:
+   ```cmd
+   git clone https://github.com/microsoft/vcpkg.git %USERPROFILE%\vcpkg
+   %USERPROFILE%\vcpkg\bootstrap-vcpkg.bat
+   ```
 
-OpenBLAS accelerates Voxtral. The build has a portable fallback when OpenBLAS
-is absent, but a 4B model is not practical with those scalar kernels. Disable
-Voxtral explicitly when only whisper.cpp is needed:
+2. **Configure with CMake**:
+   ```cmd
+   cmake -S . -B cmake-out ^
+       -G "Visual Studio 17 2022" -A x64 ^
+       -DCMAKE_TOOLCHAIN_FILE=%USERPROFILE%/vcpkg/scripts/buildsystems/vcpkg.cmake ^
+       -DVCPKG_TARGET_TRIPLET=x64-windows
+   ```
+   > **Note:** If `-DVLC_SDK_DIR` is not specified, CMake will automatically download and extract the official VideoLAN Windows SDK into `cmake-out/vlc-sdk`. To use a pre-existing SDK, pass `-DVLC_SDK_DIR=C:\path\to\vlc\sdk`.
 
-```sh
-make VLC_SUBTITLE_VOXTRAL=OFF
-```
+3. **Build Target**:
+   ```cmd
+   cmake --build cmake-out --config Release --parallel
+   ```
 
-Parakeet is enabled on Linux and Windows. Disable it when a single-file plugin
-without `libparakeet` is required:
+### Supported Windows Triplets
+- `x64-windows` (Default 64-bit DLL)
+- `x64-windows-static` (64-bit Static)
+- `x86-windows` (32-bit DLL)
+- `x86-windows-static` (32-bit Static)
+- `arm64-windows` (ARM64 Windows)
 
-```sh
-make VLC_SUBTITLE_PARAKEET=OFF
-```
-
-Moonshine is also enabled on Linux and Windows. Disable it to omit its ONNX
-Runtime dependency:
-
-```sh
-make VLC_SUBTITLE_MOONSHINE=OFF
-```
-
-The native build produces:
-
-```text
-libsuboffline_plugin.so
-libparakeet.so
-libmoonshine.so
-libonnxruntime.so.1
-```
-
-## Windows 64-bit
-
-Use MSYS2 MinGW 64-bit.
-
-Install the toolchain:
-
-```sh
-pacman -S base-devel mingw-w64-x86_64-toolchain \
-  mingw-w64-x86_64-cmake pkg-config
-```
-
-Download the 64-bit VLC `.7z` package from VideoLAN and extract its `sdk`
-directory. Then point pkg-config at the SDK:
-
-```sh
-cd /path/to/vlc-*/sdk
-sed -i "s|^prefix=.*|prefix=${PWD}|g" lib/pkgconfig/*.pc
-export PKG_CONFIG_PATH="${PWD}/lib/pkgconfig"
-cd /path/to/vlc-subtitle
-make OS=Windows_NT \
-  CC=x86_64-w64-mingw32-gcc \
-  CXX=x86_64-w64-mingw32-g++
-```
-
-The Windows build produces:
-
+The Windows build outputs into `cmake-out/.../plugin/`:
 ```text
 libsuboffline_plugin.dll
 libparakeet.dll
@@ -94,47 +71,119 @@ libmoonshine.dll
 onnxruntime.dll
 ```
 
-The current voxtral.c loader uses POSIX memory mapping, so the Windows build
-contains the Whisper, Parakeet, and Moonshine runtimes only.
+---
 
-## Optional Vulkan backend
+## macOS (Apple Silicon & Intel)
 
-CPU inference is the default build because it has the smallest runtime
-dependency surface. To compile whisper.cpp and parakeet.cpp with Vulkan
-support:
-
+### Prerequisites (Homebrew)
 ```sh
-make VLC_SUBTITLE_VULKAN=ON
+brew install cmake ninja pkgconf freetype srt
 ```
 
-This requires the Vulkan SDK and `glslc`. The `Use GPU acceleration` preference
-only has an effect when the selected runtime was built with a GPU backend.
-
-## Docker 64-bit Builds
-
-The Docker build helper creates only Linux 64-bit and Windows 64-bit artifacts:
-
+### Quick Start (Bash Script)
 ```sh
-docker build -t vlc-subtitle-build docker
-docker run --rm -v "$PWD:/plugin" vlc-subtitle-build
+./scripts/build.sh --config=Release
 ```
 
-Outputs:
+### Manual CMake Build
+```sh
+# Using Homebrew dependencies and Apple Metal acceleration
+cmake -S . -B build \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DVLC_SUBTITLE_METAL=ON
+cmake --build build --target suboffline_plugin --parallel
 
+# Using vcpkg manifest mode (arm64-osx or x64-osx)
+cmake -S . -B build \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_TOOLCHAIN_FILE=/path/to/vcpkg/scripts/buildsystems/vcpkg.cmake \
+  -DVLC_SUBTITLE_METAL=ON
+cmake --build build --target suboffline_plugin --parallel
+```
+
+The native macOS build produces in `build/plugin/`:
 ```text
-build/linux/64/libsuboffline_plugin.so
-build/linux/64/libparakeet.so
-build/linux/64/libmoonshine.so
-build/linux/64/libonnxruntime.so.1
-build/win/64/libsuboffline_plugin.dll
-build/win/64/libparakeet.dll
-build/win/64/libmoonshine.dll
-build/win/64/onnxruntime.dll
+libsuboffline_plugin.dylib
+libparakeet.dylib
+libmoonshine.dylib
 ```
 
-You can build just one target:
+---
 
+## Linux
+
+### Prerequisites
+On Debian/Ubuntu:
 ```sh
-docker run --rm -v "$PWD:/plugin" vlc-subtitle-build linux
-docker run --rm -v "$PWD:/plugin" vlc-subtitle-build windows
+sudo apt-get update && sudo apt-get install -y \
+  libvlc-dev libvlccore-dev libopenblas-dev \
+  gcc g++ cmake make pkg-config
 ```
+
+On Arch Linux:
+```sh
+sudo pacman -S vlc vlc-plugin-freetype openblas cmake make pkgconf gcc
+```
+
+### Quick Start (Bash Script)
+```sh
+./scripts/build.sh --config=Release
+```
+
+### Manual CMake Build
+```sh
+# Without vcpkg (using system packages)
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target suboffline_plugin --parallel
+
+# With vcpkg manifest mode
+cmake -S . -B build \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_TOOLCHAIN_FILE=/path/to/vcpkg/scripts/buildsystems/vcpkg.cmake
+cmake --build build --target suboffline_plugin --parallel
+```
+
+The native Linux build produces in `build/plugin/`:
+```text
+libsuboffline_plugin.so
+libparakeet.so
+libmoonshine.so
+libonnxruntime.so.1
+```
+
+---
+
+## Build Options
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `VLC_SUBTITLE_VOXTRAL` | `ON` (Linux & macOS), `OFF` (Windows) | Build Voxtral Realtime 4B backend (requires POSIX mmap) |
+| `VLC_SUBTITLE_PARAKEET` | `ON` | Build Parakeet STT backend |
+| `VLC_SUBTITLE_MOONSHINE` | `ON` | Build Moonshine STT backend |
+| `VLC_SUBTITLE_METAL` | `ON` (macOS), `OFF` | Build whisper and parakeet with Apple Metal GPU acceleration |
+| `VLC_SUBTITLE_VULKAN` | `OFF` | Build whisper and parakeet with Vulkan GPU acceleration |
+| `VLC_SDK_DIR` | Auto-download on Windows | Path to pre-extracted VideoLAN Windows SDK |
+
+---
+
+## Installation
+
+### User-Level
+- **macOS**:
+  ```sh
+  mkdir -p "$HOME/Library/Application Support/org.videolan.vlc/plugins/control"
+  cp build/plugin/*.dylib "$HOME/Library/Application Support/org.videolan.vlc/plugins/control/"
+  ```
+
+- **Linux**:
+  ```sh
+  mkdir -p ~/.local/share/vlc/plugins/control
+  cp build/plugin/* ~/.local/share/vlc/plugins/control/
+  vlc --reset-plugins-cache
+  ```
+
+- **Windows**:
+  Copy `cmake-out/.../plugin/*.dll` to:
+  ```text
+  C:\Program Files\VideoLAN\VLC\plugins\control\
+  ```

@@ -1,0 +1,111 @@
+name: Windows Builds
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: Windows ${{ matrix.arch }} (${{ matrix.build_type }})
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [ x64, x86 ]
+        build_type: [ Release, Debug ]
+        include:
+          - arch: x64
+            vs_arch: x64
+            triplet: x64-windows
+          - arch: x86
+            vs_arch: Win32
+            triplet: x86-windows
+
+    env:
+      SCCACHE_DIR: C:/Users/runneradmin/AppData/Local/Mozilla/sccache
+      CMAKE_BUILD_PARALLEL_LEVEL: 4
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Import Visual Studio env vars
+        run: py -3 .github/ci-windows.py import_vs_env ${{ matrix.arch }}
+
+      - name: Install sccache
+        run: |
+          SCCACHE_VER="v0.9.1"
+          curl -fsSL "https://github.com/mozilla/sccache/releases/download/${SCCACHE_VER}/sccache-${SCCACHE_VER}-x86_64-pc-windows-msvc.tar.gz" | \
+            tar -zxf - --strip-components=1
+          mkdir -p /c/tools/sccache
+          mv sccache.exe /c/tools/sccache/
+          echo "/c/tools/sccache" >> "$GITHUB_PATH"
+
+      - name: Get tool information
+        run: |
+          py -3 .github/ci-windows.py print_tool_info
+          sccache --version
+
+      - name: Restore sccache cache
+        uses: actions/cache@v4
+        with:
+          path: C:/Users/runneradmin/AppData/Local/Mozilla/sccache
+          key: sccache-windows-${{ matrix.arch }}-${{ matrix.build_type }}-${{ github.sha }}
+          restore-keys: |
+            sccache-windows-${{ matrix.arch }}-${{ matrix.build_type }}-
+
+      - name: Restore vcpkg cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.VCPKG_INSTALLATION_ROOT }}/installed
+            ~/.cache/vcpkg/archives
+            ~/AppData/Local/vcpkg/archives
+          key: vcpkg-windows-${{ matrix.triplet }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-windows-${{ matrix.triplet }}-
+
+      - name: Zero sccache statistics
+        run: sccache --zero-stats || true
+
+      - name: Configure CMake
+        run: |
+          cmake -S . -B build \
+            -G "Visual Studio 17 2022" \
+            -A "${{ matrix.vs_arch }}" \
+            -DCMAKE_BUILD_TYPE="${{ matrix.build_type }}" \
+            -DCMAKE_TOOLCHAIN_FILE="${VCPKG_INSTALLATION_ROOT}/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET="${{ matrix.triplet }}" \
+            -DVLC_SUBTITLE_ENABLE_SCCACHE=ON
+
+      - name: Build plugin
+        run: |
+          cmake --build build --config "${{ matrix.build_type }}" --parallel
+
+      - name: Show sccache statistics
+        run: sccache --show-stats
+
+      - name: Verify build artifacts
+        run: |
+          ls -la build/plugin/
+          test -f build/plugin/libsuboffline_plugin.dll
+
+      - name: Upload plugin artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: vlc-subtitle-windows-${{ matrix.arch }}-${{ matrix.build_type }}
+          path: build/plugin/
+          if-no-files-found: error

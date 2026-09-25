@@ -1,11 +1,54 @@
-cmake_minimum_required(VERSION 3.22.1)
+cmake_minimum_required(VERSION 3.22...3.31)
 
-project(vlc_subtitle LANGUAGES C CXX)
+project(vlc_subtitle VERSION 0.1.0 LANGUAGES C CXX)
+
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 include(GNUInstallDirs)
 include(ExternalProject)
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(VLC_PLUGIN REQUIRED IMPORTED_TARGET vlc-plugin)
+
+# Compiler definitions and flags
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+if(APPLE)
+    list(APPEND CMAKE_PREFIX_PATH "/opt/homebrew" "/usr/local")
+endif()
+
+if(MSVC)
+    add_compile_options(/utf-8 /MP /W3 /DNOMINMAX)
+    add_definitions(-D_CRT_SECURE_NO_WARNINGS)
+else()
+    add_compile_options(-Wall -Wextra)
+endif()
+
+# Automatically use sccache if available
+option(VLC_SUBTITLE_ENABLE_SCCACHE "Automatically use sccache if available" ON)
+if(VLC_SUBTITLE_ENABLE_SCCACHE)
+    find_program(SCCACHE_PROGRAM sccache)
+    if(SCCACHE_PROGRAM)
+        message(STATUS "sccache found: ${SCCACHE_PROGRAM}")
+        set(CMAKE_C_COMPILER_LAUNCHER "${SCCACHE_PROGRAM}")
+        set(CMAKE_CXX_COMPILER_LAUNCHER "${SCCACHE_PROGRAM}")
+    endif()
+endif()
+
+# Discover VLC plugin SDK (headers & libvlccore or dynamic lookup on macOS)
+find_package(VLC REQUIRED)
+
+# Discover package dependencies (managed via vcpkg, Homebrew, or system)
+find_package(Freetype REQUIRED)
+
+find_package(libsrt CONFIG QUIET)
+if(NOT libsrt_FOUND)
+    find_package(PkgConfig QUIET)
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(SRT QUIET IMPORTED_TARGET srt)
+    endif()
+endif()
 
 set(WHISPER_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/runtime/whisper.cpp"
     CACHE PATH "Path to the whisper.cpp source tree")
@@ -15,7 +58,15 @@ set(PARAKEET_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/runtime/parakeet.cpp"
     CACHE PATH "Path to the parakeet.cpp source tree")
 set(MOONSHINE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/runtime/moonshine"
     CACHE PATH "Path to the Moonshine source tree")
-option(VLC_SUBTITLE_VULKAN "Build whisper.cpp with its Vulkan backend" OFF)
+
+option(VLC_SUBTITLE_VULKAN "Build whisper.cpp and parakeet with Vulkan backend" OFF)
+if(APPLE)
+    option(VLC_SUBTITLE_METAL "Build whisper.cpp and parakeet with Apple Metal" ON)
+    set(GGML_METAL ${VLC_SUBTITLE_METAL} CACHE BOOL "" FORCE)
+else()
+    set(GGML_METAL OFF CACHE BOOL "" FORCE)
+endif()
+
 if(UNIX AND NOT WIN32)
     set(VLC_SUBTITLE_VOXTRAL_DEFAULT ON)
 else()
@@ -28,6 +79,7 @@ option(VLC_SUBTITLE_MOONSHINE "Build the Moonshine backend" ON)
 set(VLC_SUBTITLE_MODULE_NAME "suboffline" CACHE STRING
     "Internal VLC module name (override only for isolated testing)")
 
+# --- 1. Whisper.cpp Runtime ---
 if(NOT EXISTS "${WHISPER_SOURCE_DIR}/CMakeLists.txt")
     message(FATAL_ERROR
         "whisper.cpp was not found at ${WHISPER_SOURCE_DIR}. "
@@ -42,7 +94,6 @@ set(WHISPER_CURL OFF CACHE BOOL "" FORCE)
 set(WHISPER_SDL2 OFF CACHE BOOL "" FORCE)
 set(GGML_VULKAN ${VLC_SUBTITLE_VULKAN} CACHE BOOL "" FORCE)
 set(GGML_CCACHE OFF CACHE BOOL "" FORCE)
-set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 add_subdirectory("${WHISPER_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/whisper"
                  EXCLUDE_FROM_ALL)
@@ -54,6 +105,7 @@ set(VLC_SUBTITLE_SOURCES
     runtime/whisper_runtime.cpp
 )
 
+# --- 2. Voxtral Runtime (POSIX mmap / Linux & macOS) ---
 if(VLC_SUBTITLE_VOXTRAL)
     if(NOT EXISTS "${VOXTRAL_SOURCE_DIR}/voxtral.h")
         message(FATAL_ERROR
@@ -61,9 +113,6 @@ if(VLC_SUBTITLE_VOXTRAL)
             "Run: git submodule update --init --recursive")
     endif()
 
-    # antirez/voxtral.c 134d366 accidentally frees the streaming mel context
-    # twice. Generate a corrected translation unit without dirtying the pinned
-    # dependency; the replacement naturally becomes a no-op after upstream fixes it.
     file(READ "${VOXTRAL_SOURCE_DIR}/voxtral.c" VOXTRAL_CORE_SOURCE)
     string(REPLACE
         "    vox_mel_free(s->mel_ctx);\n    vox_mel_free(s->mel_ctx);"
@@ -73,8 +122,6 @@ if(VLC_SUBTITLE_VOXTRAL)
     file(WRITE "${CMAKE_BINARY_DIR}/voxtral-generated/voxtral.c"
          "${VOXTRAL_CORE_SOURCE}")
 
-    # The same revision calls CBLAS unconditionally in causal convolution.
-    # Supply its scalar equivalent for dependency-free builds.
     file(READ "${VOXTRAL_SOURCE_DIR}/voxtral_kernels.c"
          VOXTRAL_KERNEL_SOURCE)
     set(VOXTRAL_CAUSAL_SGEMM
@@ -122,7 +169,7 @@ if(VLC_SUBTITLE_VOXTRAL)
     )
     target_include_directories(voxtral_runtime_c PUBLIC
         "${VOXTRAL_SOURCE_DIR}")
-    if(NOT APPLE)
+    if(NOT APPLE AND NOT WIN32)
         target_link_libraries(voxtral_runtime_c PUBLIC m)
     endif()
     set_target_properties(voxtral_runtime_c PROPERTIES
@@ -134,8 +181,11 @@ if(VLC_SUBTITLE_VOXTRAL)
         target_link_libraries(voxtral_runtime_c PUBLIC
             "${ACCELERATE_FRAMEWORK}")
     else()
-        pkg_check_modules(OPENBLAS QUIET IMPORTED_TARGET openblas)
-        if(OPENBLAS_FOUND)
+        find_package(PkgConfig QUIET)
+        if(PKG_CONFIG_FOUND)
+            pkg_check_modules(OPENBLAS QUIET IMPORTED_TARGET openblas)
+        endif()
+        if(TARGET PkgConfig::OPENBLAS)
             set(VLC_SUBTITLE_HAS_OPENBLAS ON)
             target_compile_definitions(voxtral_runtime_c PRIVATE
                 USE_BLAS USE_OPENBLAS)
@@ -144,13 +194,14 @@ if(VLC_SUBTITLE_VOXTRAL)
         else()
             message(WARNING
                 "OpenBLAS was not found. Voxtral will use its portable CPU "
-                "kernels, which are functional but extremely slow.")
+                "kernels, which are functional but slow.")
         endif()
     endif()
 
     list(APPEND VLC_SUBTITLE_SOURCES runtime/voxtral_runtime.cpp)
 endif()
 
+# --- 3. Parakeet Runtime ---
 if(VLC_SUBTITLE_PARAKEET)
     if(NOT EXISTS "${PARAKEET_SOURCE_DIR}/CMakeLists.txt" OR
        NOT EXISTS "${PARAKEET_SOURCE_DIR}/third_party/ggml/CMakeLists.txt")
@@ -159,9 +210,6 @@ if(VLC_SUBTITLE_PARAKEET)
             "Run: git submodule update --init --recursive")
     endif()
 
-    # Parakeet and Whisper pin incompatible ggml revisions with the same symbol
-    # names. Build Parakeet in a separate CMake tree and bind references inside
-    # libparakeet to its own ggml copy so both engines can coexist safely.
     set(PARAKEET_BINARY_DIR "${CMAKE_BINARY_DIR}/parakeet-external")
     set(PARAKEET_SHARED_LIBRARY
         "${PARAKEET_BINARY_DIR}/${CMAKE_SHARED_LIBRARY_PREFIX}parakeet${CMAKE_SHARED_LIBRARY_SUFFIX}")
@@ -179,21 +227,18 @@ if(VLC_SUBTITLE_PARAKEET)
 
     set(PARAKEET_PLATFORM_ARGS "")
     set(PARAKEET_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
-    if(MINGW)
-        # mudler/parakeet.cpp e8acc617 uses int64_t in backend.hpp without
-        # including <cstdint>; MinGW does not provide that type transitively.
-        string(APPEND PARAKEET_CXX_FLAGS " -include cstdint")
-    endif()
-    if(CMAKE_CROSSCOMPILING)
-        set(PARAKEET_SYSTEM_PROCESSOR "${CMAKE_SYSTEM_PROCESSOR}")
-        if(NOT PARAKEET_SYSTEM_PROCESSOR)
-            # The supported Windows build is x86-64, but CMake leaves this
-            # unset when only CMAKE_SYSTEM_NAME is provided by the Makefile.
-            set(PARAKEET_SYSTEM_PROCESSOR "x86_64")
-        endif()
+    if(MSVC)
+        string(APPEND PARAKEET_CXX_FLAGS " /utf-8 /MP")
         list(APPEND PARAKEET_PLATFORM_ARGS
-            "-DCMAKE_SYSTEM_NAME:STRING=${CMAKE_SYSTEM_NAME}"
-            "-DCMAKE_SYSTEM_PROCESSOR:STRING=${PARAKEET_SYSTEM_PROCESSOR}")
+            "-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE=${PARAKEET_BINARY_DIR}"
+            "-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG=${PARAKEET_BINARY_DIR}"
+            "-DCMAKE_ARCHIVE_OUTPUT_DIRECTORY_RELEASE=${PARAKEET_BINARY_DIR}"
+            "-DCMAKE_ARCHIVE_OUTPUT_DIRECTORY_DEBUG=${PARAKEET_BINARY_DIR}"
+        )
+    endif()
+    if(CMAKE_TOOLCHAIN_FILE)
+        list(APPEND PARAKEET_PLATFORM_ARGS
+            "-DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}")
     endif()
 
     ExternalProject_Add(parakeet_external
@@ -221,6 +266,7 @@ if(VLC_SUBTITLE_PARAKEET)
             "-DPARAKEET_BUILD_SERVER=OFF"
             "-DPARAKEET_BUILD_TESTS=OFF"
             "-DPARAKEET_GGML_VULKAN=${VLC_SUBTITLE_VULKAN}"
+            "-DPARAKEET_GGML_METAL=${GGML_METAL}"
         BUILD_BYPRODUCTS ${PARAKEET_BYPRODUCTS}
     )
 
@@ -237,6 +283,7 @@ if(VLC_SUBTITLE_PARAKEET)
     list(APPEND VLC_SUBTITLE_SOURCES runtime/parakeet_runtime.cpp)
 endif()
 
+# --- 4. Moonshine Runtime ---
 if(VLC_SUBTITLE_MOONSHINE)
     if(NOT EXISTS "${MOONSHINE_SOURCE_DIR}/core/moonshine-c-api.h" OR
        NOT EXISTS "${MOONSHINE_SOURCE_DIR}/core/third-party/onnxruntime/CMakeLists.txt")
@@ -245,8 +292,7 @@ if(VLC_SUBTITLE_MOONSHINE)
             "Run: git submodule update --init --recursive")
     endif()
 
-    set(MOONSHINE_PREPARED_SOURCE_DIR
-        "${CMAKE_BINARY_DIR}/moonshine-source")
+    set(MOONSHINE_PREPARED_SOURCE_DIR "${CMAKE_BINARY_DIR}/moonshine-source")
     set(MOONSHINE_BINARY_DIR "${CMAKE_BINARY_DIR}/moonshine-external")
     set(MOONSHINE_SHARED_LIBRARY
         "${MOONSHINE_BINARY_DIR}/${CMAKE_SHARED_LIBRARY_PREFIX}moonshine${CMAKE_SHARED_LIBRARY_SUFFIX}")
@@ -258,6 +304,24 @@ if(VLC_SUBTITLE_MOONSHINE)
             "${MOONSHINE_SOURCE_DIR}/core/third-party/onnxruntime/lib/windows/x86_64/onnxruntime.dll")
         set(MOONSHINE_ONNXRUNTIME_IMPLIB
             "${MOONSHINE_SOURCE_DIR}/core/third-party/onnxruntime/lib/windows/x86_64/onnxruntime.lib")
+    elseif(APPLE)
+        if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64|ARM64)$")
+            set(MACOS_ARCH "arm64")
+        else()
+            set(MACOS_ARCH "x86_64")
+        endif()
+        set(MOONSHINE_ONNXRUNTIME_LIBRARY
+            "${MOONSHINE_SOURCE_DIR}/core/third-party/onnxruntime/lib/macos/${MACOS_ARCH}/libonnxruntime.1.23.2.dylib")
+        # Fall back to Homebrew or system onnxruntime if Git LFS pointer was not fetched
+        if(EXISTS "${MOONSHINE_ONNXRUNTIME_LIBRARY}")
+            file(SIZE "${MOONSHINE_ONNXRUNTIME_LIBRARY}" MOONSHINE_ORT_SIZE)
+            if(MOONSHINE_ORT_SIZE LESS 1024)
+                find_library(BREW_ONNXRUNTIME onnxruntime PATHS /opt/homebrew/lib /usr/local/lib)
+                if(BREW_ONNXRUNTIME)
+                    set(MOONSHINE_ONNXRUNTIME_LIBRARY "${BREW_ONNXRUNTIME}")
+                endif()
+            endif()
+        endif()
     elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
         set(MOONSHINE_ONNXRUNTIME_LIBRARY
             "${MOONSHINE_SOURCE_DIR}/core/third-party/onnxruntime/lib/linux/aarch64/libonnxruntime.so.1")
@@ -267,26 +331,25 @@ if(VLC_SUBTITLE_MOONSHINE)
     endif()
     if(NOT EXISTS "${MOONSHINE_ONNXRUNTIME_LIBRARY}")
         message(FATAL_ERROR
-            "Moonshine's bundled ONNX Runtime library was not found at "
-            "${MOONSHINE_ONNXRUNTIME_LIBRARY}")
+            "Moonshine bundled ONNX Runtime library was not found at ${MOONSHINE_ONNXRUNTIME_LIBRARY}")
     endif()
 
     set(MOONSHINE_PLATFORM_ARGS "")
-    if(CMAKE_CROSSCOMPILING)
-        set(MOONSHINE_SYSTEM_PROCESSOR "${CMAKE_SYSTEM_PROCESSOR}")
-        if(NOT MOONSHINE_SYSTEM_PROCESSOR)
-            set(MOONSHINE_SYSTEM_PROCESSOR "x86_64")
-        endif()
-        list(APPEND MOONSHINE_PLATFORM_ARGS
-            "-DCMAKE_SYSTEM_NAME:STRING=${CMAKE_SYSTEM_NAME}"
-            "-DCMAKE_SYSTEM_PROCESSOR:STRING=${MOONSHINE_SYSTEM_PROCESSOR}")
-    endif()
-
     set(MOONSHINE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
-    string(APPEND MOONSHINE_CXX_FLAGS
-        " -Wno-error=unused-parameter")
-    if(MINGW)
-        string(APPEND MOONSHINE_CXX_FLAGS " -include cstdint")
+    if(MSVC)
+        string(APPEND MOONSHINE_CXX_FLAGS " /utf-8 /MP")
+        list(APPEND MOONSHINE_PLATFORM_ARGS
+            "-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE=${MOONSHINE_BINARY_DIR}"
+            "-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG=${MOONSHINE_BINARY_DIR}"
+            "-DCMAKE_ARCHIVE_OUTPUT_DIRECTORY_RELEASE=${MOONSHINE_BINARY_DIR}"
+            "-DCMAKE_ARCHIVE_OUTPUT_DIRECTORY_DEBUG=${MOONSHINE_BINARY_DIR}"
+        )
+    else()
+        string(APPEND MOONSHINE_CXX_FLAGS " -Wno-error=unused-parameter")
+    endif()
+    if(CMAKE_TOOLCHAIN_FILE)
+        list(APPEND MOONSHINE_PLATFORM_ARGS
+            "-DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}")
     endif()
 
     set(MOONSHINE_BYPRODUCTS "${MOONSHINE_SHARED_LIBRARY}")
@@ -348,41 +411,47 @@ if(VLC_SUBTITLE_MOONSHINE)
     list(APPEND VLC_SUBTITLE_SOURCES runtime/moonshine_runtime.cpp)
 endif()
 
+# --- 5. Main Plugin Target ---
 add_library(suboffline_plugin MODULE ${VLC_SUBTITLE_SOURCES})
 
-target_compile_features(suboffline_plugin PRIVATE c_std_11 cxx_std_17)
 target_compile_definitions(suboffline_plugin PRIVATE
     PIC
     MODULE_STRING="${VLC_SUBTITLE_MODULE_NAME}"
 )
 if(VLC_SUBTITLE_VOXTRAL)
-    target_compile_definitions(suboffline_plugin PRIVATE
-        VLC_SUBTITLE_HAVE_VOXTRAL=1)
+    target_compile_definitions(suboffline_plugin PRIVATE VLC_SUBTITLE_HAVE_VOXTRAL=1)
     if(VLC_SUBTITLE_HAS_OPENBLAS)
-        target_compile_definitions(suboffline_plugin PRIVATE
-            VLC_SUBTITLE_VOXTRAL_OPENBLAS=1)
+        target_compile_definitions(suboffline_plugin PRIVATE VLC_SUBTITLE_VOXTRAL_OPENBLAS=1)
     endif()
 endif()
 if(VLC_SUBTITLE_PARAKEET)
-    target_compile_definitions(suboffline_plugin PRIVATE
-        VLC_SUBTITLE_HAVE_PARAKEET=1)
+    target_compile_definitions(suboffline_plugin PRIVATE VLC_SUBTITLE_HAVE_PARAKEET=1)
 endif()
 if(VLC_SUBTITLE_MOONSHINE)
-    target_compile_definitions(suboffline_plugin PRIVATE
-        VLC_SUBTITLE_HAVE_MOONSHINE=1)
+    target_compile_definitions(suboffline_plugin PRIVATE VLC_SUBTITLE_HAVE_MOONSHINE=1)
 endif()
-target_compile_options(suboffline_plugin PRIVATE
-    $<$<COMPILE_LANGUAGE:C,CXX>:-Wall>
-    $<$<COMPILE_LANGUAGE:C,CXX>:-Wextra>
-)
+
 target_include_directories(suboffline_plugin PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${CMAKE_CURRENT_SOURCE_DIR}/runtime"
 )
+
 target_link_libraries(suboffline_plugin PRIVATE
-    PkgConfig::VLC_PLUGIN
+    VLC::Plugin
     whisper
+    Freetype::Freetype
 )
+
+if(TARGET libsrt)
+    target_link_libraries(suboffline_plugin PRIVATE libsrt)
+elseif(TARGET PkgConfig::SRT)
+    target_link_libraries(suboffline_plugin PRIVATE PkgConfig::SRT)
+endif()
+
+if(APPLE)
+    target_link_options(suboffline_plugin PRIVATE -Wl,-undefined,dynamic_lookup)
+endif()
+
 if(VLC_SUBTITLE_VOXTRAL)
     target_link_libraries(suboffline_plugin PRIVATE voxtral_runtime_c)
 endif()
@@ -405,11 +474,19 @@ if(VLC_SUBTITLE_MOONSHINE)
                 "${MOONSHINE_ONNXRUNTIME_LIBRARY}"
                 "$<TARGET_FILE_DIR:suboffline_plugin>")
 endif()
+
 if(UNIX AND (VLC_SUBTITLE_PARAKEET OR VLC_SUBTITLE_MOONSHINE))
-    set_property(TARGET suboffline_plugin APPEND PROPERTY
-        BUILD_RPATH "$ORIGIN")
-    set_property(TARGET suboffline_plugin APPEND PROPERTY
-        INSTALL_RPATH "$ORIGIN")
+    if(APPLE)
+        set_property(TARGET suboffline_plugin APPEND PROPERTY
+            BUILD_RPATH "@loader_path")
+        set_property(TARGET suboffline_plugin APPEND PROPERTY
+            INSTALL_RPATH "@loader_path")
+    else()
+        set_property(TARGET suboffline_plugin APPEND PROPERTY
+            BUILD_RPATH "$ORIGIN")
+        set_property(TARGET suboffline_plugin APPEND PROPERTY
+            INSTALL_RPATH "$ORIGIN")
+    endif()
 endif()
 
 set_target_properties(suboffline_plugin PROPERTIES
@@ -419,7 +496,7 @@ set_target_properties(suboffline_plugin PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugin"
 )
 
-pkg_get_variable(VLC_PLUGINS_DIR vlc-plugin pluginsdir)
+# --- 6. Installation ---
 if(VLC_PLUGINS_DIR)
     install(TARGETS suboffline_plugin
             LIBRARY DESTINATION "${VLC_PLUGINS_DIR}/control"
