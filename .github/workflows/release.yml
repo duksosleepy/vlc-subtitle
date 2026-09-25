@@ -22,8 +22,58 @@ defaults:
     shell: bash
 
 jobs:
+  get-version:
+    name: Determine Release Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag_name: ${{ steps.version.outputs.tag_name }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version
+        id: version
+        run: |
+          REF="${{ github.ref }}"
+          PRERELEASE="false"
+
+          if [[ "${REF}" == refs/tags/v* ]]; then
+            TAG_NAME="${REF#refs/tags/}"
+            VERSION="${TAG_NAME#v}"
+          elif [[ "${REF}" == refs/tags/* ]]; then
+            TAG_NAME="${REF#refs/tags/}"
+            VERSION="${TAG_NAME}"
+          elif [[ "${REF}" == refs/heads/v*.*.x ]]; then
+            BRANCH="${REF#refs/heads/}"
+            BASE_VER="${BRANCH%.x}"
+            TAG_NAME="${BASE_VER}.0"
+            VERSION="${BASE_VER#v}.0"
+            PRERELEASE="true"
+          elif [[ "${REF}" == refs/heads/release/* ]]; then
+            BRANCH="${REF#refs/heads/release/}"
+            VERSION="${BRANCH#v}"
+            TAG_NAME="v${VERSION}"
+          else
+            VERSION="1.0.0"
+            TAG_NAME="v${VERSION}"
+          fi
+
+          if [[ "${{ inputs.prerelease }}" == "true" ]]; then
+            PRERELEASE="true"
+          fi
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${PRERELEASE}" >> "$GITHUB_OUTPUT"
+          echo "Determined Version: ${VERSION}, Tag: ${TAG_NAME}, Pre-release: ${PRERELEASE}"
+
   build-windows:
     name: Windows ${{ matrix.arch }}
+    needs: [ get-version ]
     runs-on: windows-2022
     strategy:
       fail-fast: false
@@ -95,19 +145,27 @@ jobs:
 
       - name: Package Windows artifacts
         run: |
+          VERSION="${{ needs.get-version.outputs.version }}"
           mkdir -p dist
           cd build/plugin
-          7z a ../../dist/vlc-subtitle-windows-${{ matrix.arch }}.zip *.dll
+          if [[ "${{ matrix.arch }}" == "x64" ]]; then
+            ARCH_NAME="x86_64"
+          else
+            ARCH_NAME="x86"
+          fi
+          PKG_NAME="libsuboffline-${VERSION}-${ARCH_NAME}-windows.zip"
+          7z a "../../dist/${PKG_NAME}" *.dll
 
       - name: Upload Windows package
         uses: actions/upload-artifact@v4
         with:
           name: package-windows-${{ matrix.arch }}
-          path: dist/vlc-subtitle-windows-${{ matrix.arch }}.zip
+          path: dist/*.zip
           if-no-files-found: error
 
   build-linux:
     name: Linux x64
+    needs: [ get-version ]
     runs-on: ubuntu-22.04
     env:
       SCCACHE_DIR: /home/runner/.cache/sccache
@@ -171,19 +229,22 @@ jobs:
 
       - name: Package Linux artifacts
         run: |
+          VERSION="${{ needs.get-version.outputs.version }}"
           mkdir -p dist
           cd build/plugin
-          tar -czf ../../dist/vlc-subtitle-linux-x64.tar.gz *.so*
+          PKG_NAME="libsuboffline-${VERSION}-x86_64-linux.tar.gz"
+          tar -chzf "../../dist/${PKG_NAME}" *.so*
 
       - name: Upload Linux package
         uses: actions/upload-artifact@v4
         with:
           name: package-linux-x64
-          path: dist/vlc-subtitle-linux-x64.tar.gz
+          path: dist/*.tar.gz
           if-no-files-found: error
 
   build-macos:
     name: macOS arm64
+    needs: [ get-version ]
     runs-on: macos-15
     env:
       SCCACHE_DIR: /Users/runner/Library/Caches/Mozilla.sccache
@@ -195,10 +256,14 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 0
+          lfs: true
+
+      - name: Fetch submodule Git LFS objects
+        run: git submodule foreach --recursive "git lfs pull || true"
 
       - name: Install Homebrew dependencies
         run: |
-          brew install --quiet cmake ninja pkgconf freetype srt sccache
+          brew install --quiet cmake ninja pkgconf freetype srt sccache onnxruntime
 
       - name: Restore sccache cache
         uses: actions/cache@v4
@@ -232,20 +297,24 @@ jobs:
 
       - name: Package macOS artifacts
         run: |
+          VERSION="${{ needs.get-version.outputs.version }}"
           mkdir -p dist
           cd build/plugin
-          tar -czf ../../dist/vlc-subtitle-macos-arm64.tar.gz *.dylib
+          PKG_NAME="libsuboffline-${VERSION}-aarch64-apple-darwin.tar.gz"
+          tar -chzf "../../dist/${PKG_NAME}" *.dylib
+          # Also create an arm64-apple-darwin alias for convenience
+          cp "../../dist/${PKG_NAME}" "../../dist/libsuboffline-${VERSION}-arm64-apple-darwin.tar.gz"
 
       - name: Upload macOS package
         uses: actions/upload-artifact@v4
         with:
           name: package-macos-arm64
-          path: dist/vlc-subtitle-macos-arm64.tar.gz
+          path: dist/*.tar.gz
           if-no-files-found: error
 
   publish-release:
     name: Publish GitHub Release
-    needs: [ build-windows, build-linux, build-macos ]
+    needs: [ get-version, build-windows, build-linux, build-macos ]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -259,39 +328,15 @@ jobs:
           path: release-assets
           merge-multiple: true
 
-      - name: Determine tag name and release status
-        id: release_meta
+      - name: Display package list
         run: |
-          REF="${{ github.ref }}"
-          PRERELEASE="false"
-
-          if [[ "${REF}" == refs/tags/* ]]; then
-            TAG_NAME="${REF#refs/tags/}"
-          elif [[ "${REF}" == refs/heads/v*.*.x ]]; then
-            BRANCH="${REF#refs/heads/}"
-            BASE_VER="${BRANCH%.x}"
-            TAG_NAME="${BASE_VER}.0"
-            PRERELEASE="true"
-          elif [[ "${REF}" == refs/heads/release/* ]]; then
-            BRANCH="${REF#refs/heads/release/}"
-            TAG_NAME="v${BRANCH}"
-          else
-            TAG_NAME="v$(date +'%Y.%m.%d-%H%M%S')"
-          fi
-
-          if [[ "${{ inputs.prerelease }}" == "true" ]]; then
-            PRERELEASE="true"
-          fi
-
-          echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
-          echo "prerelease=${PRERELEASE}" >> "$GITHUB_OUTPUT"
-          echo "Release tag: ${TAG_NAME} (prerelease: ${PRERELEASE})"
+          ls -la release-assets/
 
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_NAME: ${{ steps.release_meta.outputs.tag_name }}
-          PRERELEASE: ${{ steps.release_meta.outputs.prerelease }}
+          TAG_NAME: ${{ needs.get-version.outputs.tag_name }}
+          PRERELEASE: ${{ needs.get-version.outputs.prerelease }}
         run: |
           FLAGS=()
           if [[ "${PRERELEASE}" == "true" ]]; then
@@ -308,16 +353,22 @@ jobs:
             fi
           fi
 
-          if [[ -n "${NOTES_FILE}" ]]; then
-            gh release create "${TAG_NAME}" \
-              release-assets/* \
-              --title "${TAG_NAME}" \
-              --notes-file "${NOTES_FILE}" \
-              "${FLAGS[@]}"
+          if gh release view "${TAG_NAME}" &>/dev/null; then
+            echo "Release ${TAG_NAME} already exists. Uploading assets..."
+            gh release upload "${TAG_NAME}" release-assets/* --clobber
           else
-            gh release create "${TAG_NAME}" \
-              release-assets/* \
-              --title "${TAG_NAME}" \
-              --generate-notes \
-              "${FLAGS[@]}"
+            echo "Creating new release ${TAG_NAME}..."
+            if [[ -n "${NOTES_FILE}" ]]; then
+              gh release create "${TAG_NAME}" \
+                release-assets/* \
+                --title "${TAG_NAME}" \
+                --notes-file "${NOTES_FILE}" \
+                "${FLAGS[@]}"
+            else
+              gh release create "${TAG_NAME}" \
+                release-assets/* \
+                --title "${TAG_NAME}" \
+                --generate-notes \
+                "${FLAGS[@]}"
+            fi
           fi
