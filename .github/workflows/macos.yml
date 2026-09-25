@@ -33,10 +33,14 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 0
+          lfs: true
+
+      - name: Fetch submodule Git LFS objects
+        run: git submodule foreach --recursive "git lfs pull || true"
 
       - name: Install Homebrew dependencies
         run: |
-          brew install --quiet cmake ninja pkgconf freetype srt sccache
+          brew install --quiet cmake ninja pkgconf freetype srt sccache onnxruntime
           sccache --version
 
       - name: Restore sccache cache
