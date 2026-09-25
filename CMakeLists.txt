@@ -442,8 +442,12 @@ target_link_libraries(suboffline_plugin PRIVATE
     Freetype::Freetype
 )
 
-if(TARGET libsrt)
+if(TARGET SRT::srt)
+    target_link_libraries(suboffline_plugin PRIVATE SRT::srt)
+elseif(TARGET libsrt)
     target_link_libraries(suboffline_plugin PRIVATE libsrt)
+elseif(TARGET srt)
+    target_link_libraries(suboffline_plugin PRIVATE srt)
 elseif(TARGET PkgConfig::SRT)
     target_link_libraries(suboffline_plugin PRIVATE PkgConfig::SRT)
 endif()

@@ -4,6 +4,8 @@
 *.dll
 *.dylib
 build/
+build*/
 cmake-out/
+vcpkg_installed/
 __pycache__/
 *.pyc
