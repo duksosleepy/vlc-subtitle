@@ -1,0 +1,323 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - 'v*.*.x'
+      - 'release/**'
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: 'Mark as pre-release'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build-windows:
+    name: Windows ${{ matrix.arch }}
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [ x64, x86 ]
+        include:
+          - arch: x64
+            vs_arch: x64
+            triplet: x64-windows
+          - arch: x86
+            vs_arch: Win32
+            triplet: x86-windows
+
+    env:
+      SCCACHE_DIR: C:/Users/runneradmin/AppData/Local/Mozilla/sccache
+      CMAKE_BUILD_PARALLEL_LEVEL: 4
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Import Visual Studio env vars
+        run: py -3 .github/workflows/ci-windows.py import_vs_env ${{ matrix.arch }}
+
+      - name: Install sccache
+        run: |
+          SCCACHE_VER="v0.9.1"
+          curl -fsSL "https://github.com/mozilla/sccache/releases/download/${SCCACHE_VER}/sccache-${SCCACHE_VER}-x86_64-pc-windows-msvc.tar.gz" | \
+            tar -zxf - --strip-components=1
+          mkdir -p /c/tools/sccache
+          mv sccache.exe /c/tools/sccache/
+          echo "/c/tools/sccache" >> "$GITHUB_PATH"
+
+      - name: Restore sccache cache
+        uses: actions/cache@v4
+        with:
+          path: C:/Users/runneradmin/AppData/Local/Mozilla/sccache
+          key: sccache-windows-release-${{ matrix.arch }}-${{ github.sha }}
+          restore-keys: |
+            sccache-windows-release-${{ matrix.arch }}-
+
+      - name: Restore vcpkg cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.VCPKG_INSTALLATION_ROOT }}/installed
+            ~/.cache/vcpkg/archives
+            ~/AppData/Local/vcpkg/archives
+          key: vcpkg-windows-${{ matrix.triplet }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-windows-${{ matrix.triplet }}-
+
+      - name: Configure CMake
+        run: |
+          cmake -S . -B build \
+            -G "Visual Studio 17 2022" \
+            -A "${{ matrix.vs_arch }}" \
+            -DCMAKE_BUILD_TYPE="Release" \
+            -DCMAKE_TOOLCHAIN_FILE="${VCPKG_INSTALLATION_ROOT}/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET="${{ matrix.triplet }}" \
+            -DVLC_SUBTITLE_ENABLE_SCCACHE=ON
+
+      - name: Build plugin
+        run: |
+          cmake --build build --config "Release" --parallel
+
+      - name: Package Windows artifacts
+        run: |
+          mkdir -p dist
+          cd build/plugin
+          7z a ../../dist/vlc-subtitle-windows-${{ matrix.arch }}.zip *.dll
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-windows-${{ matrix.arch }}
+          path: dist/vlc-subtitle-windows-${{ matrix.arch }}.zip
+          if-no-files-found: error
+
+  build-linux:
+    name: Linux x64
+    runs-on: ubuntu-22.04
+    env:
+      SCCACHE_DIR: /home/runner/.cache/sccache
+      CMAKE_BUILD_PARALLEL_LEVEL: 4
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libvlc-dev \
+            libvlccore-dev \
+            libopenblas-dev \
+            pkg-config \
+            cmake \
+            gcc \
+            g++
+
+      - name: Install sccache
+        run: |
+          SCCACHE_VER="v0.9.1"
+          curl -fsSL "https://github.com/mozilla/sccache/releases/download/${SCCACHE_VER}/sccache-${SCCACHE_VER}-x86_64-unknown-linux-musl.tar.gz" | \
+            tar -zxf - --strip-components=1
+          sudo mv sccache /usr/local/bin/
+
+      - name: Restore sccache cache
+        uses: actions/cache@v4
+        with:
+          path: /home/runner/.cache/sccache
+          key: sccache-linux-release-${{ github.sha }}
+          restore-keys: |
+            sccache-linux-release-
+
+      - name: Restore vcpkg cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.VCPKG_INSTALLATION_ROOT }}/installed
+            ~/.cache/vcpkg/archives
+          key: vcpkg-linux-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-linux-
+
+      - name: Configure CMake
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE="Release" \
+            -DCMAKE_TOOLCHAIN_FILE="${VCPKG_INSTALLATION_ROOT}/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET="x64-linux" \
+            -DVLC_SUBTITLE_ENABLE_SCCACHE=ON
+
+      - name: Build plugin
+        run: |
+          cmake --build build --target suboffline_plugin --parallel
+
+      - name: Package Linux artifacts
+        run: |
+          mkdir -p dist
+          cd build/plugin
+          tar -czf ../../dist/vlc-subtitle-linux-x64.tar.gz *.so*
+
+      - name: Upload Linux package
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-linux-x64
+          path: dist/vlc-subtitle-linux-x64.tar.gz
+          if-no-files-found: error
+
+  build-macos:
+    name: macOS arm64
+    runs-on: macos-15
+    env:
+      SCCACHE_DIR: /Users/runner/Library/Caches/Mozilla.sccache
+      CMAKE_BUILD_PARALLEL_LEVEL: 4
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install Homebrew dependencies
+        run: |
+          brew install --quiet cmake ninja pkgconf freetype srt sccache
+
+      - name: Restore sccache cache
+        uses: actions/cache@v4
+        with:
+          path: /Users/runner/Library/Caches/Mozilla.sccache
+          key: sccache-macos-release-${{ github.sha }}
+          restore-keys: |
+            sccache-macos-release-
+
+      - name: Restore vcpkg cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/vcpkg/archives
+          key: vcpkg-macos-arm64-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-macos-arm64-
+
+      - name: Configure CMake
+        run: |
+          cmake -S . -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE="Release" \
+            -DCMAKE_PREFIX_PATH="/opt/homebrew" \
+            -DVLC_SUBTITLE_METAL=ON \
+            -DVLC_SUBTITLE_ENABLE_SCCACHE=ON
+
+      - name: Build plugin
+        run: |
+          cmake --build build --target suboffline_plugin --parallel
+
+      - name: Package macOS artifacts
+        run: |
+          mkdir -p dist
+          cd build/plugin
+          tar -czf ../../dist/vlc-subtitle-macos-arm64.tar.gz *.dylib
+
+      - name: Upload macOS package
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-macos-arm64
+          path: dist/vlc-subtitle-macos-arm64.tar.gz
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [ build-windows, build-linux, build-macos ]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all release packages
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Determine tag name and release status
+        id: release_meta
+        run: |
+          REF="${{ github.ref }}"
+          PRERELEASE="false"
+
+          if [[ "${REF}" == refs/tags/* ]]; then
+            TAG_NAME="${REF#refs/tags/}"
+          elif [[ "${REF}" == refs/heads/v*.*.x ]]; then
+            BRANCH="${REF#refs/heads/}"
+            BASE_VER="${BRANCH%.x}"
+            TAG_NAME="${BASE_VER}.0"
+            PRERELEASE="true"
+          elif [[ "${REF}" == refs/heads/release/* ]]; then
+            BRANCH="${REF#refs/heads/release/}"
+            TAG_NAME="v${BRANCH}"
+          else
+            TAG_NAME="v$(date +'%Y.%m.%d-%H%M%S')"
+          fi
+
+          if [[ "${{ inputs.prerelease }}" == "true" ]]; then
+            PRERELEASE="true"
+          fi
+
+          echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${PRERELEASE}" >> "$GITHUB_OUTPUT"
+          echo "Release tag: ${TAG_NAME} (prerelease: ${PRERELEASE})"
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ steps.release_meta.outputs.tag_name }}
+          PRERELEASE: ${{ steps.release_meta.outputs.prerelease }}
+        run: |
+          FLAGS=()
+          if [[ "${PRERELEASE}" == "true" ]]; then
+            FLAGS+=("--prerelease")
+          fi
+
+          # Extract notes from CHANGELOG.md if matching section exists
+          NOTES_FILE=""
+          if [[ -f CHANGELOG.md ]]; then
+            NOTES="$(awk "/^## ${TAG_NAME}/ {x=1; next} /^## v[0-9]/ { x=0 } x" CHANGELOG.md | sed '/./,$!d')"
+            if [[ -n "${NOTES}" ]]; then
+              echo "${NOTES}" > release-notes.md
+              NOTES_FILE="release-notes.md"
+            fi
+          fi
+
+          if [[ -n "${NOTES_FILE}" ]]; then
+            gh release create "${TAG_NAME}" \
+              release-assets/* \
+              --title "${TAG_NAME}" \
+              --notes-file "${NOTES_FILE}" \
+              "${FLAGS[@]}"
+          else
+            gh release create "${TAG_NAME}" \
+              release-assets/* \
+              --title "${TAG_NAME}" \
+              --generate-notes \
+              "${FLAGS[@]}"
+          fi

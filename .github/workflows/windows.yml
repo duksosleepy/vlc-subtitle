@@ -43,7 +43,7 @@ jobs:
           fetch-depth: 0
 
       - name: Import Visual Studio env vars
-        run: py -3 .github/ci-windows.py import_vs_env ${{ matrix.arch }}
+        run: py -3 .github/workflows/ci-windows.py import_vs_env ${{ matrix.arch }}
 
       - name: Install sccache
         run: |
@@ -56,7 +56,7 @@ jobs:
 
       - name: Get tool information
         run: |
-          py -3 .github/ci-windows.py print_tool_info
+          py -3 .github/workflows/ci-windows.py print_tool_info
           sccache --version
 
       - name: Restore sccache cache
