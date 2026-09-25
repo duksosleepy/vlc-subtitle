@@ -10,3 +10,6 @@
 [submodule "runtime/moonshine"]
 	path = runtime/moonshine
 	url = https://github.com/moonshine-ai/moonshine.git
+[submodule "vcpkg"]
+	path = vcpkg
+	url = https://github.com/Microsoft/vcpkg.git
