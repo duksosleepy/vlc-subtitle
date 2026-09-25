@@ -162,7 +162,19 @@ libonnxruntime.so.1
 | `VLC_SUBTITLE_MOONSHINE` | `ON` | Build Moonshine STT backend |
 | `VLC_SUBTITLE_METAL` | `ON` (macOS), `OFF` | Build whisper and parakeet with Apple Metal GPU acceleration |
 | `VLC_SUBTITLE_VULKAN` | `OFF` | Build whisper and parakeet with Vulkan GPU acceleration |
+| `VLC_SUBTITLE_NATIVE_ARCH` | `OFF` | Optimize for host CPU (`-march=native`) |
+| `VLC_SUBTITLE_ENABLE_LTO` | `OFF` | Enable Link-Time Optimization (LTO / IPO) |
 | `VLC_SDK_DIR` | Auto-download on Windows | Path to pre-extracted VideoLAN Windows SDK |
+
+---
+
+## Code Formatting
+
+The codebase follows modern C/C++ style enforced by `.clang-format`:
+
+```sh
+clang-format -i src/*.c src/*.h runtime/*.cpp runtime/*.hpp runtime/*.h
+```
 
 ---
 
