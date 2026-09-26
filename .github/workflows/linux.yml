@@ -58,7 +58,7 @@ jobs:
       - name: Setup CMake
         uses: lukka/get-cmake@latest
         with:
-          cmake-version: 4.4.3
+          cmakeVersion: 4.4.3
 
       - name: Install sccache
         run: |
