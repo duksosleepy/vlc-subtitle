@@ -1,4 +1,10 @@
-cmake_minimum_required(VERSION 3.22...3.31)
+cmake_minimum_required(VERSION 3.22...4.4.3)
+
+# Normalize CMAKE_LINKER_TYPE (e.g. "mold" -> "MOLD") for CMake 3.29+
+if(CMAKE_LINKER_TYPE)
+    string(TOUPPER "${CMAKE_LINKER_TYPE}" _VLC_UPPER_LINKER)
+    set(CMAKE_LINKER_TYPE "${_VLC_UPPER_LINKER}" CACHE STRING "Linker type" FORCE)
+endif()
 
 project(vlc_subtitle VERSION 0.1.0 LANGUAGES C CXX)
 
@@ -23,6 +29,11 @@ if(MSVC)
     add_definitions(-D_CRT_SECURE_NO_WARNINGS)
 else()
     add_compile_options(-Wall -Wextra)
+endif()
+
+# Fallback for CMAKE_LINKER_TYPE on CMake < 3.29
+if(CMAKE_LINKER_TYPE STREQUAL "MOLD" AND CMAKE_VERSION VERSION_LESS "3.29.0")
+    add_link_options("-fuse-ld=mold")
 endif()
 
 # Automatically use sccache if available
@@ -243,6 +254,10 @@ if(VLC_SUBTITLE_PARAKEET)
         list(APPEND PARAKEET_PLATFORM_ARGS
             "-DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}")
     endif()
+    if(CMAKE_LINKER_TYPE)
+        list(APPEND PARAKEET_PLATFORM_ARGS
+            "-DCMAKE_LINKER_TYPE=${CMAKE_LINKER_TYPE}")
+    endif()
 
     ExternalProject_Add(parakeet_external
         SOURCE_DIR "${PARAKEET_SOURCE_DIR}"
@@ -353,6 +368,10 @@ if(VLC_SUBTITLE_MOONSHINE)
     if(CMAKE_TOOLCHAIN_FILE)
         list(APPEND MOONSHINE_PLATFORM_ARGS
             "-DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}")
+    endif()
+    if(CMAKE_LINKER_TYPE)
+        list(APPEND MOONSHINE_PLATFORM_ARGS
+            "-DCMAKE_LINKER_TYPE=${CMAKE_LINKER_TYPE}")
     endif()
 
     set(MOONSHINE_BYPRODUCTS "${MOONSHINE_SHARED_LIBRARY}")

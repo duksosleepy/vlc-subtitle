@@ -43,6 +43,11 @@ jobs:
           brew install --quiet cmake ninja pkgconf freetype srt sccache onnxruntime
           sccache --version
 
+      - name: Setup CMake
+        uses: lukka/get-cmake@latest
+        with:
+          cmake-version: 4.4.3
+
       - name: Restore sccache cache
         uses: actions/cache@v4
         with:

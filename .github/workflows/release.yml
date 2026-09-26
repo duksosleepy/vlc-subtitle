@@ -99,6 +99,11 @@ jobs:
           mv sccache.exe /c/tools/sccache/
           echo "/c/tools/sccache" >> "$GITHUB_PATH"
 
+      - name: Setup CMake
+        uses: lukka/get-cmake@latest
+        with:
+          cmake-version: 4.4.3
+
       - name: Restore sccache cache
         uses: actions/cache@v4
         with:
@@ -178,9 +183,13 @@ jobs:
             libvlccore-dev \
             libopenblas-dev \
             pkg-config \
-            cmake \
             gcc \
             g++
+
+      - name: Setup CMake
+        uses: lukka/get-cmake@latest
+        with:
+          cmake-version: 4.4.3
 
       - name: Install sccache
         run: |
@@ -207,13 +216,20 @@ jobs:
           restore-keys: |
             vcpkg-linux-
 
+      - name: Install mold linker
+        uses: rui314/setup-mold@v1
+        with:
+          mold-version: 2.42.1
+          make-default: false
+
       - name: Configure CMake
         run: |
           cmake -S . -B build \
             -DCMAKE_BUILD_TYPE="Release" \
             -DCMAKE_TOOLCHAIN_FILE="${VCPKG_INSTALLATION_ROOT}/scripts/buildsystems/vcpkg.cmake" \
             -DVCPKG_TARGET_TRIPLET="x64-linux" \
-            -DVLC_SUBTITLE_ENABLE_SCCACHE=ON
+            -DVLC_SUBTITLE_ENABLE_SCCACHE=ON \
+            -DCMAKE_LINKER_TYPE=mold
 
       - name: Build plugin
         run: |
@@ -256,6 +272,11 @@ jobs:
       - name: Install Homebrew dependencies
         run: |
           brew install --quiet cmake ninja pkgconf freetype srt sccache onnxruntime
+
+      - name: Setup CMake
+        uses: lukka/get-cmake@latest
+        with:
+          cmake-version: 4.4.3
 
       - name: Restore sccache cache
         uses: actions/cache@v4

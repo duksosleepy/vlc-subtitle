@@ -141,6 +141,20 @@ cmake -S . -B build \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_TOOLCHAIN_FILE=/path/to/vcpkg/scripts/buildsystems/vcpkg.cmake
 cmake --build build --target suboffline_plugin --parallel
+
+# Fast linking with mold (Linux)
+cmake -S . -B build \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_LINKER_TYPE=mold
+cmake --build build --target suboffline_plugin --parallel
+```
+
+### Installing mold Linker (Linux)
+```sh
+curl -L -o mold.tar.gz \
+  https://github.com/rui314/mold/releases/latest/download/mold-2.42.1-x86_64-linux.tar.gz
+tar -xzf mold.tar.gz
+sudo cp -r mold-2.42.1-x86_64-linux/* /usr/local/
 ```
 
 The native Linux build produces in `build/plugin/`:
@@ -157,6 +171,7 @@ libonnxruntime.so.1
 
 | Option | Default | Description |
 | --- | --- | --- |
+| `CMAKE_LINKER_TYPE` | System default | Linker to use (`mold`, `lld`, `gold`, `bfd`). `mold` accelerates Linux builds. |
 | `VLC_SUBTITLE_VOXTRAL` | `ON` (Linux & macOS), `OFF` (Windows) | Build Voxtral Realtime 4B backend (requires POSIX mmap) |
 | `VLC_SUBTITLE_PARAKEET` | `ON` | Build Parakeet STT backend |
 | `VLC_SUBTITLE_MOONSHINE` | `ON` | Build Moonshine STT backend |

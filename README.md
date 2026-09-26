@@ -274,4 +274,25 @@ PCM push, flush, result, and status contract. Whisper-specific code is isolated 
 
 ## Build
 
-See [BUILD.md](BUILD.md).
+See [BUILD.md](BUILD.md) for full instructions across Linux, macOS, and Windows.
+
+### Building with mold Linker (Linux)
+
+You can significantly speed up link times on Linux by using the [mold](https://github.com/rui314/mold) linker:
+
+1. **Install mold**:
+   ```sh
+   curl -L -o mold.tar.gz \
+     https://github.com/rui314/mold/releases/latest/download/mold-2.42.1-x86_64-linux.tar.gz
+   tar -xzf mold.tar.gz
+   sudo cp -r mold-2.42.1-x86_64-linux/* /usr/local/
+   ```
+
+2. **Configure and build with CMake**:
+   ```sh
+   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_LINKER_TYPE=mold
+   cmake --build build --target suboffline_plugin --parallel
+   ```
+
+> [!NOTE]
+> `mold` is supported for Linux ELF targets. macOS builds use Apple Clang's native linker (`ld64`), and Windows builds use MSVC (`link.exe`).
