@@ -6,7 +6,7 @@ if(CMAKE_LINKER_TYPE)
     set(CMAKE_LINKER_TYPE "${_VLC_UPPER_LINKER}" CACHE STRING "Linker type" FORCE)
 endif()
 
-project(vlc_subtitle VERSION 0.1.0 LANGUAGES C CXX)
+project(vlc_subtitle VERSION 1.0.1 LANGUAGES C CXX)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 

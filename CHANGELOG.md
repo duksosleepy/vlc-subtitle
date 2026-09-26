@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## v1.0.1
+
+### Highlights & Improvements
+- **Fast Linking with `mold` (Linux)**: Added first-class support for the high-performance `mold` linker (`-DCMAKE_LINKER_TYPE=mold`) on Linux, speeding up final binary and shared library linking.
+- **Upgraded Linux CI Toolchain**: Upgraded Linux CI builds to **GCC 15 and G++ 15** via the official toolchain PPA with `update-alternatives`.
+- **Modernized CMake Integration**: Added native `CMAKE_LINKER_TYPE` normalization and propagation down to external runtime subprojects (`parakeet` and `moonshine`), with CMake compatibility ranges updated up to 4.4.3.
+- **Documentation**: Added clear instructions in `README.md` and `BUILD.md` for installing and building with `mold` on Linux.
+
 ## v1.0.0
 
 ### Highlights
